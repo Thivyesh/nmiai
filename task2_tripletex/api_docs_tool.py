@@ -66,7 +66,7 @@ def _resolve_ref(ref: str, spec: dict) -> dict:
 
 
 def _get_schema_fields(schema: dict, spec: dict, depth: int = 0) -> list[str]:
-    if depth > 1:
+    if depth > 2:
         return []
     fields = []
     props = schema.get("properties", {})
@@ -83,19 +83,21 @@ def _get_schema_fields(schema: dict, spec: dict, depth: int = 0) -> list[str]:
         if ref:
             ref_name = ref.split("/")[-1]
             typ = f"object({ref_name})"
-            if depth == 0 and ref_name in (
-                "TravelDetails", "InternationalId", "Address",
-                "DeliveryAddress", "HolidayAllowanceEarned",
-            ):
+            # Always resolve sub-schemas at depth 0 to show their fields
+            if depth == 0:
                 sub_schema = _resolve_ref(ref, spec)
                 sub_fields = _get_schema_fields(sub_schema, spec, depth + 1)
                 if sub_fields:
-                    typ += " fields: {" + ", ".join(
-                        f.strip().split(":")[0] for f in sub_fields[:8]
-                    ) + "}"
+                    typ += "\n" + "\n".join(f"    {sf}" for sf in sub_fields)
         if prop.get("items", {}).get("$ref"):
             item_name = prop["items"]["$ref"].split("/")[-1]
             typ = f"array[{item_name}]"
+            # Resolve array item schema at depth 0
+            if depth == 0:
+                item_schema = _resolve_ref(prop["items"]["$ref"], spec)
+                item_fields = _get_schema_fields(item_schema, spec, depth + 1)
+                if item_fields:
+                    typ += "\n" + "\n".join(f"    {sf}" for sf in item_fields)
         req = " *REQUIRED*" if name in required else ""
         enum_str = f" enum={enum}" if enum else ""
         fields.append(f"  {name}: {typ}{req}{enum_str} — {desc}")
