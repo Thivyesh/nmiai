@@ -99,27 +99,36 @@ Workflow:
 1. POST /product with: name, number, priceExcludingVatCurrency
    - If price is stated as "inkl. mva" (incl. VAT), use priceIncludingVatCurrency
    - If price is stated as "eks. mva" or just "pris" (excl. VAT), use priceExcludingVatCurrency
+   - Do NOT set vatType — it defaults to id=6 which works. Other vatType IDs FAIL.
+   - If product number already exists ("Produktnummeret er i bruk"), GET /product?number=N to find its ID.
 Mistakes:
 - Omitting product number
 - Using wrong price field (incl vs excl VAT)
+- Setting vatType on products (only default id=6 works)
 
 ## TASK: Create Invoice (multi-step)
-Trigger: "opprett faktura", "create invoice", "erstellen Rechnung", "crear factura", "créer facture"
+Trigger: "opprett faktura", "create invoice", "erstellen Rechnung", "crear factura", "créer facture", "crie uma fatura"
 Checks: customer (with all fields), products (if mentioned), order, invoice dates/amounts, payment
+PREREQUISITE — MUST DO FIRST:
+  GET /ledger/account?number=1920&fields=id,version,bankAccountNumber
+  If bankAccountNumber is empty: PUT /ledger/account/{id} with {"id": N, "version": N, "number": 1920, "name": "Bankinnskudd", "bankAccountNumber": "86011117947"}
+  WITHOUT THIS, INVOICE CREATION WILL FAIL.
 Workflow:
-1. GET /ledger/account?number=1920&fields=id,version,bankAccountNumber → check bank account
-2. If bankAccountNumber empty: PUT /ledger/account/{id} with bankAccountNumber="86011117947"
-3. POST /customer with ALL mentioned fields (name, email, org.nr, address) → customer_id
-4. POST /product for EACH product mentioned (name, number, price) → product_ids
-5. POST /order with: customer, orderDate, deliveryDate, orderLines (with product refs) → order_id
-6. POST /invoice with: invoiceDate, invoiceDueDate, customer, orders: [{"id": order_id}]
-7. If payment: GET /invoice/paymentType → paymentTypeId
-8. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
+1. Check bank account (see PREREQUISITE above) — the PLANNER must do this GET
+2. POST /customer with ALL mentioned fields (name, email, org.nr, address, isCustomer: true) → customer_id
+3. POST /product for EACH product mentioned (name, number, price) → product_ids
+   - Do NOT set vatType on products — it defaults to id=6 which works. Other vatType IDs (3, 5, 31) FAIL on products.
+   - If product number already exists, GET /product?number=NNNN to find its ID instead.
+4. POST /order with: customer, orderDate, deliveryDate, orderLines (with product: {"id": N}, count, unitPriceExcludingVatCurrency) → order_id
+5. POST /invoice with: invoiceDate, invoiceDueDate, customer, orders: [{"id": order_id}]
+6. If payment: GET /invoice/paymentType → paymentTypeId
+7. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
 Mistakes:
+- FORGETTING BANK ACCOUNT CHECK — #1 cause of invoice failures
+- Setting vatType on products — only id=6 works, others cause validation errors
 - Using description-only order lines instead of creating products first
 - Creating invoice without order (must create order first)
 - Forgetting deliveryDate on order (REQUIRED)
-- Forgetting bank account check
 
 ## TASK: Create Credit Note
 Trigger: "kreditnota", "credit note", "nota de crédito", "Gutschrift"
