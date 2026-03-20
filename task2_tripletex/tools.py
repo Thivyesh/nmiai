@@ -18,6 +18,7 @@ class TripletexClient:
             method,
             f"{self.base_url}/{endpoint.lstrip('/')}",
             auth=self.auth,
+            timeout=30,
             **kwargs,
         )
         if not resp.ok:
@@ -129,8 +130,12 @@ def tripletex_delete(endpoint: str) -> str:
         HTTP status code as string.
     """
     client = _get_client()
-    status = client.delete(endpoint)
-    return f"Deleted successfully (HTTP {status})"
+    result = client.delete(endpoint)
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+# Planner gets read-only access for research
+PLANNER_TOOLS = [tripletex_get]
+
+# Executor gets all tools for execution
 ALL_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
