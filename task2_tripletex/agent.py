@@ -9,6 +9,7 @@ import time
 from anthropic import RateLimitError
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langgraph.prebuilt import create_react_agent
@@ -114,13 +115,14 @@ class TripletexAgent:
     """Orchestrates the planner → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
-        self.planner_llm = ChatAnthropic(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=4096,
+        # Planner: Gemini Flash (300 RPM, 1M TPM — no rate limit issues)
+        self.planner_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
             temperature=0,
             max_retries=2,
-            timeout=30.0,
+            timeout=30,
         )
+        # Executor: Sonnet (best tool-calling precision)
         self.executor_llm = ChatAnthropic(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -128,6 +130,7 @@ class TripletexAgent:
             max_retries=2,
             timeout=60.0,
         )
+        # Fallback: Ollama Qwen for rate-limited scenarios
         self.fallback_llm = ChatOllama(
             model="qwen2.5:32b",
             temperature=0,
@@ -223,6 +226,12 @@ class TripletexAgent:
 
         last_message = result["messages"][-1]
         plan = last_message.content
+        # Gemini returns content as list of dicts; extract text
+        if isinstance(plan, list):
+            plan = "\n".join(
+                part.get("text", str(part)) if isinstance(part, dict) else str(part)
+                for part in plan
+            )
         logger.info("Plan:\n%s", plan)
         return plan
 
