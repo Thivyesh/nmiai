@@ -1,12 +1,14 @@
 """LangGraph-based Tripletex accounting agent with planner → executor architecture."""
 
+import asyncio
 import base64
 import logging
 import os
+import time
 
 from anthropic import RateLimitError
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langchain_ollama import ChatOllama
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langgraph.prebuilt import create_react_agent
@@ -21,49 +23,37 @@ from task2_tripletex.tools import (
 
 logger = logging.getLogger(__name__)
 
+# Total time budget: 4.5 minutes (leave 30s buffer before 5-min competition timeout)
+TOTAL_TIMEOUT = 270
+# Planner gets max 90 seconds
+PLANNER_TIMEOUT = 90
+# Executor gets the rest
+EXECUTOR_TIMEOUT = 180
+
 PLANNER_SYSTEM_PROMPT = """\
 You are an expert accounting task planner for Tripletex, a Norwegian accounting system.
 
 ## Your Tools (use in this priority order)
-1. **lookup_task_pattern(task_description)** — CALL FIRST. Returns workflow, scoring criteria, and common mistakes for the task type.
-2. **tripletex_get(endpoint, params)** — Read-only API access. Use to find real IDs (departments, accounts, employees, payment types).
-3. **lookup_api_docs(search, semantic)** — Look up exact field names and schemas from the OpenAPI spec. Use semantic=True for non-English terms.
-4. **search_tripletex_docs(query)** — Search official Tripletex developer FAQs and guides.
-5. **web_search(query)** — Last resort web search when nothing else helps.
+1. **lookup_task_pattern(task_description)** — CALL FIRST. Returns workflow, scoring criteria, and common mistakes.
+2. **tripletex_get(endpoint, params)** — Read-only API access to find real IDs.
+3. **lookup_api_docs(search, semantic)** — Look up exact field names and schemas. Use semantic=True for non-English terms.
+4. **search_tripletex_docs(query)** — Search official Tripletex developer FAQs.
+5. **web_search(query)** — Last resort web search.
 
 ## Workflow
-
-### Step 1: Look up the task pattern
-Call lookup_task_pattern with the task description. This gives you:
-- The exact workflow steps
-- What fields the competition checks
-- Common mistakes to avoid
-Follow the pattern precisely.
-
-### Step 2: Look up real IDs
-Use tripletex_get to find IDs needed by the plan. The sandbox is FRESH — most entities must be created.
-- GET /department?fields=id&count=1 (for employee tasks)
-- GET /ledger/account?number=NNNN&fields=id (for voucher tasks — ALWAYS get account ID, never use number!)
-- GET /travelExpense/paymentType (for travel expense tasks)
-- GET /invoice/paymentType (for invoice payment tasks)
-
-### Step 3: For unfamiliar tasks — DISCOVER
-If no task pattern matches:
-a) lookup_api_docs(search, semantic=True) to find relevant endpoints
-b) lookup_api_docs for the POST schema to get exact field names
-c) search_tripletex_docs for workflow guidance
-d) tripletex_get to explore the endpoint
-e) web_search as last resort
-
-### Step 4: Output the plan
-Include real IDs, exact field names, and exact payloads.
+1. Call lookup_task_pattern with the task description to get the workflow pattern.
+2. Use tripletex_get to find real IDs (departments, accounts, payment types).
+3. If unfamiliar task: use lookup_api_docs and search_tripletex_docs to discover the workflow.
+4. Output a concrete plan with real IDs and exact payloads.
 
 ## CRITICAL RULES
 - Every entity mentioned in the prompt must be CREATED as a separate record.
 - Every field value in the prompt WILL be checked. Include ALL of them.
 - Use EXACT values from the prompt. NEVER modify names, emails, amounts.
-- ALWAYS use account {"id": N} not {"number": N} — look up the ID via GET first.
+- ALWAYS use account {"id": N} not {"number": N} — look up the ID first.
 - For voucher postings: use amountGross + amountGrossCurrency (NEVER "amount").
+- ONLY plan steps for endpoints you are CONFIDENT exist. Do NOT guess endpoints.
+- Keep the plan to ESSENTIAL steps only. Fewer steps = fewer errors = higher score.
 
 ## Output Format
 TASK SUMMARY: <one line>
@@ -96,29 +86,25 @@ You are a Tripletex API executor. Follow the plan step by step.
 3. After POST/PUT, save the returned ID for subsequent steps.
 4. Use EXACT values from the plan and original task. NEVER modify names, emails, amounts.
 5. For query-param endpoints (entitlements, payment, credit note), put params in the URL, pass body="{}".
+6. If a step references an endpoint you're not sure exists, SKIP it rather than guessing.
 
-## Error Recovery (RESEARCH before retrying — max 2 retries per step)
-
+## Error Recovery (max 1 retry per step)
 When a step fails:
 1. Read the error message.
-2. Call **lookup_api_docs** for the failing endpoint to get the correct schema.
-3. If that's not enough, call **search_tripletex_docs** with the error message.
-4. Fix the specific issue and retry ONCE.
-5. If still failing, call **lookup_task_pattern** for workflow guidance.
-6. Last resort: **web_search** for the specific error.
-7. After 2 failed retries, move to the next step.
+2. Call **lookup_api_docs** for the correct schema.
+3. Fix the specific issue and retry ONCE.
+4. If retry fails, SKIP and move to the next step. Do NOT spiral.
 
 ## Common Error Fixes
-- "Request mapping failed" → wrong field names. Look up the schema.
-- "Feltet må fylles ut" → missing required field. Add it.
-- "Object not found" / 404 → wrong ID or URL format. Check query params vs path.
-- "Kunde mangler" → account requires customer ID in the posting.
-- "Enhetspris må være uten mva" → use unitPriceExcludingVatCurrency and set isPrioritizeAmountsIncludingVat.
-- Account references: ALWAYS use {"id": N}, never {"number": N}.
-- Voucher amounts: use amountGross + amountGrossCurrency, NEVER "amount".
+- "Request mapping failed" → wrong field names. Look up schema.
+- "Feltet må fylles ut" → missing required field.
+- "Object not found" / 404 → wrong ID or URL format.
+- "Kunde mangler" → posting needs customer ID.
+- Account references: ALWAYS {"id": N}, never {"number": N}.
+- Voucher amounts: amountGross + amountGrossCurrency, NEVER "amount".
 
 ## Efficiency
-- Every 4xx error hurts the score. Research before retrying.
+- Every 4xx error hurts the score. Be precise.
 - Do NOT add extra verification GET calls.
 - Stop after completing all planned steps.
 """
@@ -142,14 +128,12 @@ class TripletexAgent:
             max_retries=2,
             timeout=60.0,
         )
-        # Ollama fallback for rate-limited scenarios
         self.fallback_llm = ChatOllama(
             model="qwen2.5:32b",
             temperature=0,
             num_ctx=16384,
         )
 
-        # Primary agents
         self.planner = create_react_agent(
             model=self.planner_llm,
             tools=PLANNER_TOOLS,
@@ -160,7 +144,6 @@ class TripletexAgent:
             tools=EXECUTOR_TOOLS,
             prompt=EXECUTOR_SYSTEM_PROMPT,
         )
-        # Fallback agents (Ollama — no rate limits)
         self.fallback_planner = create_react_agent(
             model=self.fallback_llm,
             tools=PLANNER_TOOLS,
@@ -207,6 +190,19 @@ class TripletexAgent:
                     })
         return parts
 
+    async def _run_with_fallback(self, primary, fallback, messages, config):
+        """Run primary agent, fall back to Ollama on rate limit."""
+        try:
+            return await primary.ainvoke(messages, config=config)
+        except RateLimitError as e:
+            logger.warning("Rate-limited, falling back to Ollama: %s", e)
+            return await fallback.ainvoke(messages, config=config)
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                logger.warning("Rate-limited (generic), falling back to Ollama: %s", e)
+                return await fallback.ainvoke(messages, config=config)
+            raise
+
     async def _plan(self, request: SolveRequest, config: dict) -> str:
         """Use the planner agent to research the API and create an execution plan."""
         content_parts = [{"type": "text", "text": f"## Task Prompt\n\n{request.prompt}"}]
@@ -216,16 +212,14 @@ class TripletexAgent:
             content_parts.extend(self._extract_file_content(request))
 
         messages = {"messages": [HumanMessage(content=content_parts)]}
-        planner_config = {**config, "recursion_limit": 30}
+        planner_config = {**config, "recursion_limit": 25}
 
-        try:
-            result = await self.planner.ainvoke(messages, config=planner_config)
-        except (RateLimitError, Exception) as e:
-            if "rate" in str(e).lower() or "429" in str(e) or isinstance(e, RateLimitError):
-                logger.warning("Planner rate-limited, falling back to Ollama: %s", e)
-                result = await self.fallback_planner.ainvoke(messages, config=planner_config)
-            else:
-                raise
+        result = await asyncio.wait_for(
+            self._run_with_fallback(
+                self.planner, self.fallback_planner, messages, planner_config
+            ),
+            timeout=PLANNER_TIMEOUT,
+        )
 
         last_message = result["messages"][-1]
         plan = last_message.content
@@ -234,6 +228,8 @@ class TripletexAgent:
 
     async def solve(self, request: SolveRequest) -> SolveResponse:
         """Run the planner → executor pipeline to solve a Tripletex task."""
+        start_time = time.time()
+
         client = TripletexClient(
             base_url=request.tripletex_credentials.base_url,
             session_token=request.tripletex_credentials.session_token,
@@ -245,37 +241,48 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Step 1: Plan
-        plan = await self._plan(request, config)
+        # Step 1: Plan (with timeout)
+        try:
+            plan = await self._plan(request, config)
+        except asyncio.TimeoutError:
+            logger.warning("Planner timed out after %ds", PLANNER_TIMEOUT)
+            return SolveResponse(status="completed")
+        except Exception as e:
+            logger.exception("Planner failed: %s", e)
+            return SolveResponse(status="completed")
 
-        # Step 2: Execute
-        # 40 iterations allows ~15 tool calls with error recovery
+        # Check remaining time
+        elapsed = time.time() - start_time
+        remaining = TOTAL_TIMEOUT - elapsed
+        if remaining < 30:
+            logger.warning("Only %ds left after planning — skipping execution", remaining)
+            return SolveResponse(status="completed")
+
+        # Step 2: Execute (with timeout based on remaining time)
+        executor_timeout = min(EXECUTOR_TIMEOUT, remaining - 10)  # 10s buffer
         executor_config = {**config, "recursion_limit": 40}
         executor_message = HumanMessage(
             content=f"## Original Task\n{request.prompt}\n\n## Execution Plan\n{plan}"
         )
+
         try:
-            await self.executor.ainvoke(
-                {"messages": [executor_message]},
-                config=executor_config,
+            await asyncio.wait_for(
+                self._run_with_fallback(
+                    self.executor, self.fallback_executor,
+                    {"messages": [executor_message]}, executor_config
+                ),
+                timeout=executor_timeout,
             )
-        except (RateLimitError, Exception) as e:
-            if "rate" in str(e).lower() or "429" in str(e) or isinstance(e, RateLimitError):
-                logger.warning("Executor rate-limited, falling back to Ollama: %s", e)
-                try:
-                    await self.fallback_executor.ainvoke(
-                        {"messages": [executor_message]},
-                        config=executor_config,
-                    )
-                except Exception as e2:
-                    logger.warning("Fallback executor also failed: %s", e2)
-            elif "recursion" in str(e).lower():
-                # Hit iteration limit — partial work is better than crashing
+        except asyncio.TimeoutError:
+            logger.warning("Executor timed out after %ds — returning partial results", executor_timeout)
+        except Exception as e:
+            if "recursion" in str(e).lower():
                 logger.warning("Executor hit recursion limit — returning partial results")
             else:
-                # Unknown error — still return completed so competition scores partial work
                 logger.exception("Executor error — returning completed for partial scoring")
 
+        total_time = time.time() - start_time
+        logger.info("Task completed in %.1fs", total_time)
         return SolveResponse(status="completed")
 
     def _create_langfuse_handler(self) -> LangfuseCallbackHandler | None:
