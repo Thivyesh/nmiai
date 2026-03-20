@@ -40,9 +40,14 @@ POST /employee: {firstName, lastName, email, phoneNumberMobile, department: {"id
 PUT /employee/entitlement/:grantEntitlementsByTemplate?employeeId=N&template=ALL_PRIVILEGES
 - No body. Query params only. Grants admin (kontoadministrator) role.
 
-POST /customer: {name, email, phoneNumber, isCustomer: true}
+POST /customer: {name, email, phoneNumber, isCustomer: true, organizationNumber: "string"}
+- If the task includes an org number (org.nr), set organizationNumber on the customer.
 
-POST /order: {customer: {"id": N}, orderDate, deliveryDate, orderLines: [{description, count, unitPriceExcludingVatCurrency}]}
+POST /product: {name, number: "string", priceExcludingVatCurrency: N}
+- If the task specifies product numbers, create products first, then reference them in order lines.
+
+POST /order: {customer: {"id": N}, orderDate, deliveryDate, orderLines: [{product: {"id": N}, description, count, unitPriceExcludingVatCurrency}]}
+- If products were created, include product: {"id": N} in each order line.
 POST /invoice: {invoiceDate, invoiceDueDate, customer: {"id": N}, orders: [{"id": N}]}
 PUT /invoice/{id}/:payment?paymentDate=YYYY-MM-DD&paymentTypeId=N&paidAmount=N (query params, NO body)
 PUT /invoice/{id}/:createCreditNote?date=YYYY-MM-DD (query params)
