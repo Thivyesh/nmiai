@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "NM i AI Competition - Object Detection & Tripletex Agent"
 requires-python = ">=3.12"
 dependencies = [
+    "duckduckgo-search>=8.1.1",
     "fastapi>=0.135.1",
     "httpx>=0.28.1",
     "langchain>=1.2.13",

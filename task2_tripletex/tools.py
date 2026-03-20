@@ -137,12 +137,13 @@ def tripletex_delete(endpoint: str) -> str:
 from task2_tripletex.api_docs_tool import lookup_api_docs
 from task2_tripletex.devdocs_tool import search_tripletex_docs
 from task2_tripletex.task_patterns_tool import lookup_task_pattern
+from task2_tripletex.web_search_tool import web_search
 
 # Planner gets read-only API access + all lookup tools
-PLANNER_TOOLS = [tripletex_get, lookup_api_docs, lookup_task_pattern, search_tripletex_docs]
+PLANNER_TOOLS = [tripletex_get, lookup_api_docs, lookup_task_pattern, search_tripletex_docs, web_search]
 
 # Executor gets write tools + all lookup tools for error recovery
-EXECUTOR_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete, lookup_api_docs, lookup_task_pattern, search_tripletex_docs]
+EXECUTOR_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete, lookup_api_docs, lookup_task_pattern, search_tripletex_docs, web_search]
 
 # Full toolset (if needed)
 ALL_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
