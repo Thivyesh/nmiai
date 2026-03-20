@@ -122,13 +122,12 @@ class TripletexAgent:
             max_retries=2,
             timeout=30,
         )
-        # Executor: Sonnet (best tool-calling precision)
-        self.executor_llm = ChatAnthropic(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
+        # Executor: Gemini Pro (strong reasoning + tool use, 300 RPM)
+        self.executor_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro",
             temperature=0,
             max_retries=2,
-            timeout=60.0,
+            timeout=60,
         )
         # Fallback: Ollama Qwen for rate-limited scenarios
         self.fallback_llm = ChatOllama(
