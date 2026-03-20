@@ -113,25 +113,28 @@ class TripletexAgent:
     """Orchestrates the planner → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
-        # Planner: Gemini Flash (fast, less demand pressure)
-        self.planner_llm = ChatGoogleGenerativeAI(
+        # Planner: Haiku (fast, Tier 2: 1000 RPM)
+        self.planner_llm = ChatAnthropic(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            temperature=0,
+            max_retries=2,
+            timeout=30.0,
+        )
+        # Executor: Sonnet (precise tool calling, Tier 2: 1000 RPM)
+        self.executor_llm = ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            temperature=0,
+            max_retries=2,
+            timeout=60.0,
+        )
+        # Fallback: Gemini Flash (if Anthropic is down)
+        self.fallback_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             temperature=0,
             max_retries=2,
             timeout=60,
-        )
-        # Executor: Gemini Pro (strong reasoning + tool use, 300 RPM)
-        self.executor_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro",
-            temperature=0,
-            max_retries=2,
-            timeout=60,
-        )
-        # Fallback: Ollama Qwen for rate-limited scenarios
-        self.fallback_llm = ChatOllama(
-            model="qwen2.5:32b",
-            temperature=0,
-            num_ctx=16384,
         )
 
         self.planner = create_react_agent(
@@ -195,10 +198,15 @@ class TripletexAgent:
         try:
             return await primary.ainvoke(messages, config=config)
         except Exception as e:
-            err = str(e).lower()
-            if any(k in err for k in ["429", "rate", "503", "unavailable", "high demand", "overloaded"]):
-                logger.warning("Primary model unavailable, falling back to Ollama: %s", e)
-                return await fallback.ainvoke(messages, config=config)
+            err = f"{type(e).__name__}: {e}".lower()
+            retriable_keywords = ["429", "rate", "503", "unavailable", "high demand", "overloaded", "servererror"]
+            if any(k in err for k in retriable_keywords):
+                logger.warning("Primary model unavailable, falling back to Ollama: %s", type(e).__name__)
+                try:
+                    return await fallback.ainvoke(messages, config=config)
+                except Exception as e2:
+                    logger.warning("Fallback also failed: %s", e2)
+                    raise e  # Re-raise original
             raise
 
     async def _plan(self, request: SolveRequest, config: dict) -> str:
