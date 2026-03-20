@@ -207,45 +207,48 @@ Workflow:
 3. POST /order with: customer, orderDate, deliveryDate, orderLines
 
 ## TASK: Create Accounting Dimension and Voucher
-Trigger: "dimensjon", "dimension", "bilag", "voucher", "journal entry", "postering", "Buchung"
+Trigger: "dimensjon", "dimension", "bilag", "voucher", "journal entry", "postering", "Buchung", "dimensão contabilística", "lançar um lançamento"
 Checks: dimension created, dimension values exist, voucher posted with correct account and dimension link
 Workflow:
-1. POST /ledger/accountingDimensionName — create the dimension
+1. GET /ledger/account?number=NNNN&fields=id,number,name — MUST get account ID first (API requires ID, not number!)
+   - Also get a second account for the balancing posting (e.g., account 1920 or another expense account)
+2. POST /ledger/accountingDimensionName — create the dimension
    Payload: {"dimensionName": "Region", "description": "...", "dimensionIndex": 1, "active": true}
    - dimensionIndex: 1, 2, or 3 (for free dimensions 1-3)
-2. POST /ledger/accountingDimensionValue — create each dimension value
-   Payload: {"displayName": "Vestlandet", "dimensionIndex": 1, "active": true, "showInVoucherRegistration": true}
-   - dimensionIndex must match the dimension created in step 1
-3. POST /ledger/accountingDimensionValue — create additional values as needed
-4. POST /ledger/voucher?sendToLedger=true — create the journal entry
+3. POST /ledger/accountingDimensionValue — create first value, save returned ID
+   Payload: {"displayName": "Vestlandet", "dimensionIndex": 1, "active": true, "number": "VEST", "showInVoucherRegistration": true}
+4. POST /ledger/accountingDimensionValue — create second value, save returned ID
+5. POST /ledger/voucher?sendToLedger=true — create the journal entry
    Payload: {
      "date": "YYYY-MM-DD",
      "description": "...",
      "postings": [
        {
-         "account": {"id": N},
+         "date": "YYYY-MM-DD",
+         "row": 1,
+         "account": {"id": <account_id_from_step_1>},
          "description": "...",
-         "amountGross": N,
-         "amountGrossCurrency": N,
-         "freeAccountingDimension1": {"id": <dimension_value_id>}
+         "amountGross": 47500,
+         "amountGrossCurrency": 47500,
+         "freeAccountingDimension1": {"id": <dimension_value_id_from_step_4>}
        },
        {
-         "account": {"id": N},
-         "amountGross": -N,
-         "amountGrossCurrency": -N
+         "date": "YYYY-MM-DD",
+         "row": 2,
+         "account": {"id": <balancing_account_id>},
+         "amountGross": -47500,
+         "amountGrossCurrency": -47500
        }
      ]
    }
-   - Use freeAccountingDimension1/2/3 matching the dimensionIndex
-   - amountGross and amountGrossCurrency must be equal for NOK
-   - Debits positive, credits negative
-   - Postings must balance (sum to zero)
-Mistakes:
-- Using account number instead of account ID (must GET /ledger/account?number=N to find ID)
-- Forgetting amountGrossCurrency (must equal amountGross for NOK)
-- Forgetting the balancing credit posting (postings must sum to zero)
-- Using wrong dimension field (freeAccountingDimension1 vs 2 vs 3 — must match dimensionIndex)
-- Some accounts (1920, 2400) are system-managed and cannot be used in manual vouchers
+CRITICAL VOUCHER RULES:
+- Account MUST be {"id": N} — NEVER {"number": N}. Always GET the account ID first!
+- Use amountGross AND amountGrossCurrency (both required, must be equal for NOK)
+- Do NOT use "amount" — it does not work. Use amountGross.
+- Include "date" and "row" on each posting
+- Postings MUST balance (sum of amountGross must be zero)
+- Use freeAccountingDimension1 for dimensionIndex=1, freeAccountingDimension2 for index=2, etc.
+- Some accounts (1920 Bankinnskudd, 2400 Leverandørgjeld) are system-managed — use 1900 Kontanter or other general accounts for balancing
 
 ## TASK: Enable Sales Module / Accounting Module
 Trigger: "aktiver modul", "enable module", "aktivere", "sales module"
