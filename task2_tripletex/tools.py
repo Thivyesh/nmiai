@@ -134,8 +134,10 @@ def tripletex_delete(endpoint: str) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-# Planner gets read-only access for research
-PLANNER_TOOLS = [tripletex_get]
+from task2_tripletex.api_docs_tool import lookup_api_docs
+
+# Planner gets read-only API access + docs lookup for research
+PLANNER_TOOLS = [tripletex_get, lookup_api_docs]
 
 # Executor gets write tools + GET as fallback for error recovery
 EXECUTOR_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]

@@ -35,6 +35,11 @@ async def solve(request: dict):
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
 
 
+@app.post("/")
+async def solve_root(request: dict):
+    return await solve(request)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}

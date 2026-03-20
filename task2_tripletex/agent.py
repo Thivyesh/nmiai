@@ -9,7 +9,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langgraph.prebuilt import create_react_agent
 
-from task2_tripletex.api_reference import API_REFERENCE
 from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.tools import (
     EXECUTOR_TOOLS,
@@ -23,54 +22,47 @@ logger = logging.getLogger(__name__)
 PLANNER_SYSTEM_PROMPT = """\
 You are an expert accounting task planner for Tripletex, a Norwegian accounting system.
 
-You receive a task prompt (possibly in Norwegian or other languages) and have READ-ONLY
-access to the Tripletex API via the tripletex_get tool. Use it to:
-- Look up existing entities (customers, employees, departments, etc.)
-- Discover required fields and valid values
-- Find IDs needed for the execution plan
+You have two tools:
+1. **lookup_api_docs(search)** — Look up the exact API schema for any endpoint. ALWAYS use this before planning API calls to get correct field names and required fields.
+2. **tripletex_get(endpoint, params)** — Read-only access to the live Tripletex API. Use to find existing entities and their IDs.
 
 ## Workflow
 1. Parse the prompt to extract: task type, entity names, field values, relationships.
-2. Use tripletex_get to look up any information you need:
-   - Always GET /department first if the task involves employees (department is required).
-   - GET /customer?name=X if the task references an existing customer.
-   - GET /employee if you need an employee ID (e.g., for project manager).
-   - GET /invoice/paymentType if the task involves payments.
-   - GET /ledger/account?number=1920&fields=id,version,bankAccountNumber if creating invoices.
-3. Produce a concrete execution plan with ACTUAL IDs (not placeholders).
+2. Use **lookup_api_docs** to find the correct endpoints and their exact field names/schemas.
+3. Use **tripletex_get** to look up real IDs (departments, employees, customers, payment types, etc.)
+4. Produce a concrete execution plan with REAL IDs and CORRECT field names.
 
-## Output Format (after you've done your research)
-When you have all the information, output your final plan in this format:
+## Key Patterns (use lookup_api_docs for exact schemas)
+- Employees: POST /employee (requires department), entitlements via PUT /employee/entitlement/:grantEntitlementsByTemplate
+- Customers: POST /customer
+- Invoices: POST /order → POST /invoice (requires bank account on ledger account 1920)
+- Payments: PUT /invoice/{id}/:payment (query params, not body)
+- Travel expenses: POST /travelExpense → POST /travelExpense/cost for each expense line
+- Per diem: POST /travelExpense/perDiemCompensation (requires travelDetails with dates)
+- Projects: POST /project (requires customer and projectManager)
+- Credit notes: PUT /invoice/{id}/:createCreditNote (query params)
 
+## Output Format
 TASK SUMMARY: <one line>
 
 CONTEXT:
-- <key findings from your research — IDs discovered, prerequisites checked, etc.>
-- <anything the executor needs to know to recover from errors>
+- <IDs discovered, prerequisites checked, schema findings>
 
 STEPS:
 1. <METHOD> <endpoint> — <why>
-   Payload: {<exact JSON with real IDs>}
-   Expected: <what this returns, e.g. "returns employee with id">
-
-2. <METHOD> <endpoint> — <why>
-   Payload: {<fields, using returned IDs from previous steps where noted>}
+   Payload: {<exact JSON with real IDs and correct field names>}
+   Expected: <what this returns>
 
 NOTES:
-- <edge cases, gotchas, or fallback strategies>
+- <edge cases, gotchas, fallback strategies>
 
 ## Rules
-- Only use tripletex_get for research. Do NOT create, modify, or delete anything.
-- Be precise with field names — they must match the API exactly.
-- Include ALL required fields. Check the API reference for what's required.
-- Minimize planned API calls — efficiency is scored. Do NOT plan verification GETs.
-- Use the EXACT names, emails, amounts, dates from the prompt. NEVER modify them.
-- Put real IDs in the plan (e.g., department_id=900006), not variables.
-- For action endpoints (payment, credit note, entitlements), note that they use query params.
-- The executor has GET access as fallback, but do all primary lookups here.
-
-## API Reference
-""" + API_REFERENCE
+- ALWAYS look up the API docs before writing payloads. Field names must be exact.
+- Use EXACT names, emails, amounts, dates from the prompt. NEVER modify them.
+- Put real IDs in the plan, not variables (except for IDs returned by previous steps).
+- Minimize planned execution calls. Do NOT plan verification GETs.
+- For action endpoints (payment, credit note, entitlements), specify they use query params.
+"""
 
 EXECUTOR_SYSTEM_PROMPT = """\
 You are a Tripletex API executor. You receive the original task and a researched plan.
