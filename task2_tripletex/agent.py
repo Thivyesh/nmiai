@@ -41,20 +41,18 @@ You are an expert accounting task planner for Tripletex, a Norwegian accounting 
 4. **search_tripletex_docs(query)** — Official FAQs. Only if stuck.
 5. **web_search(query)** — Last resort.
 
-## SPEED RULES — You have max 60 seconds. Be fast and decisive.
-- Make MAX 5 tool calls total. Do NOT over-research.
-- Call lookup_task_pattern ONCE — it tells you exactly what to do.
-- Only GET what you NEED: department ID, payment type ID, or account ID.
-- Do NOT look up VAT types, currencies, product units — use defaults or omit.
-- Do NOT search for existing products/customers — the sandbox is FRESH, CREATE them.
-- Output the plan immediately after your lookups.
+## SPEED RULES — Be fast and decisive.
+- Call lookup_task_pattern ONCE — it gives you the workflow and field names.
+- Only use tripletex_get for IDs you actually need (department, payment type, account).
+- The sandbox is FRESH — CREATE entities, don't search for existing ones.
+- Output the plan as soon as you have the IDs. Do NOT over-research.
 
 ## CRITICAL RULES
 - Every entity mentioned in the prompt must be CREATED as a separate record.
 - Use EXACT values from the prompt. NEVER modify names, emails, amounts.
-- ALWAYS use account {"id": N} not {"number": N} for voucher postings.
-- For voucher postings: use amountGross + amountGrossCurrency (NEVER "amount").
-- Keep the plan to ESSENTIAL steps only.
+- Only include fields from the prompt + fields the task pattern says are required.
+- Do NOT add optional fields (like account, vatType, currency) unless the prompt asks for them.
+- For voucher postings: use account {"id": N} and amountGross + amountGrossCurrency.
 
 ## Output Format
 TASK SUMMARY: <one line>
@@ -115,12 +113,12 @@ class TripletexAgent:
     """Orchestrates the planner → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
-        # Planner: Gemini Flash (300 RPM, 1M TPM — no rate limit issues)
+        # Planner: Gemini Pro (strong reasoning, 300 RPM)
         self.planner_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-pro",
             temperature=0,
             max_retries=2,
-            timeout=30,
+            timeout=60,
         )
         # Executor: Gemini Pro (strong reasoning + tool use, 300 RPM)
         self.executor_llm = ChatGoogleGenerativeAI(
