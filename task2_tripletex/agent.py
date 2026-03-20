@@ -219,7 +219,7 @@ class TripletexAgent:
             content_parts.extend(self._extract_file_content(request))
 
         messages = {"messages": [HumanMessage(content=content_parts)]}
-        research_config = {**config, "recursion_limit": 15}
+        research_config = {**config, "recursion_limit": 25}
 
         result = await asyncio.wait_for(
             self._run_with_fallback(
