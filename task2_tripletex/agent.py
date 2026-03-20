@@ -130,11 +130,15 @@ class TripletexAgent:
             model="claude-haiku-4-5-20251001",
             max_tokens=4096,
             temperature=0,
+            max_retries=2,
+            timeout=30.0,
         )
         self.executor_llm = ChatAnthropic(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
             temperature=0,
+            max_retries=2,  # Don't retry more than 2x on rate limits
+            timeout=60.0,  # 60s timeout per LLM call
         )
         # Planner: Haiku (fast, separate rate limit) + read-only tools
         self.planner = create_react_agent(
@@ -217,17 +221,19 @@ class TripletexAgent:
             config["callbacks"] = [langfuse_handler]
 
         # Step 1: Plan (planner can do GET calls to research)
-        plan = await self._plan(request, config)
+        # Cap planner at 20 iterations to avoid burning rate limits
+        planner_config = {**config, "recursion_limit": 20}
+        plan = await self._plan(request, planner_config)
 
-        # Step 2: Execute — give the executor the plan AND original task for context
-        # The executor needs the original prompt to verify the plan makes sense
-        # and to recover intelligently if something goes wrong
+        # Step 2: Execute
+        # Cap executor at 15 iterations — if it can't finish in 15 tool calls, stop
+        executor_config = {**config, "recursion_limit": 15}
         executor_message = HumanMessage(
             content=f"## Original Task\n{request.prompt}\n\n## Execution Plan\n{plan}"
         )
         await self.executor.ainvoke(
             {"messages": [executor_message]},
-            config=config,
+            config=executor_config,
         )
 
         return SolveResponse(status="completed")
