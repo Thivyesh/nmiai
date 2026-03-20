@@ -4,8 +4,10 @@ import base64
 import logging
 import os
 
+from anthropic import RateLimitError
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_ollama import ChatOllama
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langgraph.prebuilt import create_react_agent
 
@@ -137,18 +139,35 @@ class TripletexAgent:
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
             temperature=0,
-            max_retries=2,  # Don't retry more than 2x on rate limits
-            timeout=60.0,  # 60s timeout per LLM call
+            max_retries=2,
+            timeout=60.0,
         )
-        # Planner: Haiku (fast, separate rate limit) + read-only tools
+        # Ollama fallback for rate-limited scenarios
+        self.fallback_llm = ChatOllama(
+            model="qwen2.5:32b",
+            temperature=0,
+            num_ctx=16384,
+        )
+
+        # Primary agents
         self.planner = create_react_agent(
             model=self.planner_llm,
             tools=PLANNER_TOOLS,
             prompt=PLANNER_SYSTEM_PROMPT,
         )
-        # Executor: ReAct agent with write tools only (POST, PUT, DELETE)
         self.executor = create_react_agent(
             model=self.executor_llm,
+            tools=EXECUTOR_TOOLS,
+            prompt=EXECUTOR_SYSTEM_PROMPT,
+        )
+        # Fallback agents (Ollama — no rate limits)
+        self.fallback_planner = create_react_agent(
+            model=self.fallback_llm,
+            tools=PLANNER_TOOLS,
+            prompt=PLANNER_SYSTEM_PROMPT,
+        )
+        self.fallback_executor = create_react_agent(
+            model=self.fallback_llm,
             tools=EXECUTOR_TOOLS,
             prompt=EXECUTOR_SYSTEM_PROMPT,
         )
@@ -196,12 +215,18 @@ class TripletexAgent:
             content_parts.append({"type": "text", "text": "\n## Attached Files\n"})
             content_parts.extend(self._extract_file_content(request))
 
-        result = await self.planner.ainvoke(
-            {"messages": [HumanMessage(content=content_parts)]},
-            config=config,
-        )
+        messages = {"messages": [HumanMessage(content=content_parts)]}
+        planner_config = {**config, "recursion_limit": 20}
 
-        # Extract the final plan from the last AI message
+        try:
+            result = await self.planner.ainvoke(messages, config=planner_config)
+        except (RateLimitError, Exception) as e:
+            if "rate" in str(e).lower() or "429" in str(e) or isinstance(e, RateLimitError):
+                logger.warning("Planner rate-limited, falling back to Ollama: %s", e)
+                result = await self.fallback_planner.ainvoke(messages, config=planner_config)
+            else:
+                raise
+
         last_message = result["messages"][-1]
         plan = last_message.content
         logger.info("Plan:\n%s", plan)
@@ -220,21 +245,28 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Step 1: Plan (planner can do GET calls to research)
-        # Cap planner at 20 iterations to avoid burning rate limits
-        planner_config = {**config, "recursion_limit": 20}
-        plan = await self._plan(request, planner_config)
+        # Step 1: Plan
+        plan = await self._plan(request, config)
 
         # Step 2: Execute
-        # Cap executor at 15 iterations — if it can't finish in 15 tool calls, stop
         executor_config = {**config, "recursion_limit": 15}
         executor_message = HumanMessage(
             content=f"## Original Task\n{request.prompt}\n\n## Execution Plan\n{plan}"
         )
-        await self.executor.ainvoke(
-            {"messages": [executor_message]},
-            config=executor_config,
-        )
+        try:
+            await self.executor.ainvoke(
+                {"messages": [executor_message]},
+                config=executor_config,
+            )
+        except (RateLimitError, Exception) as e:
+            if "rate" in str(e).lower() or "429" in str(e) or isinstance(e, RateLimitError):
+                logger.warning("Executor rate-limited, falling back to Ollama: %s", e)
+                await self.fallback_executor.ainvoke(
+                    {"messages": [executor_message]},
+                    config=executor_config,
+                )
+            else:
+                raise
 
         return SolveResponse(status="completed")
 
