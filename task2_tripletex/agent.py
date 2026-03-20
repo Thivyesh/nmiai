@@ -122,17 +122,17 @@ class TripletexAgent:
     """Orchestrates the researcher → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
-        # Researcher: Haiku (fast, focused on finding risks and IDs)
+        # Researcher: Sonnet (good reasoning for risk identification)
         self.researcher_llm = ChatAnthropic(
-            model="claude-haiku-4-5-20251001",
+            model="claude-sonnet-4-20250514",
             max_tokens=4096,
             temperature=0,
             max_retries=2,
             timeout=30.0,
         )
-        # Executor: Sonnet (smart, plans and executes with full context)
+        # Executor: Opus (best at following instructions precisely)
         self.executor_llm = ChatAnthropic(
-            model="claude-sonnet-4-20250514",
+            model="claude-opus-4-20250514",
             max_tokens=4096,
             temperature=0,
             max_retries=2,
