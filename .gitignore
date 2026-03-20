@@ -5,3 +5,4 @@ __pycache__/
 submission.zip
 openapi_cache.json
 search_index.npz
+pattern_index.npz
