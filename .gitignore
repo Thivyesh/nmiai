@@ -6,3 +6,5 @@ submission.zip
 openapi_cache.json
 search_index.npz
 pattern_index.npz
+devdocs_index.npz
+developer_docs.json

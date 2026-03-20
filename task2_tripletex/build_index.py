@@ -5,6 +5,7 @@ Run this once:  uv run python -m task2_tripletex.build_index
 Produces:
   - task2_tripletex/search_index.npz    (API endpoint embeddings)
   - task2_tripletex/pattern_index.npz   (task pattern embeddings)
+  - task2_tripletex/devdocs_index.npz   (Tripletex developer docs embeddings)
 """
 
 import json
@@ -165,10 +166,49 @@ def build_pattern_index():
     print(f"Saved pattern index: {embeddings.shape[0]} chunks, {embeddings.shape[1]}d")
 
 
+DEVDOCS_PATH = Path(__file__).parent / "developer_docs.json"
+DEVDOCS_INDEX_PATH = Path(__file__).parent / "devdocs_index.npz"
+
+
+def build_devdocs_index():
+    """Build embeddings for Tripletex developer documentation."""
+    if not DEVDOCS_PATH.exists():
+        print("developer_docs.json not found — skipping devdocs index")
+        return
+
+    with open(DEVDOCS_PATH) as f:
+        docs = json.load(f)
+
+    titles = []
+    texts = []
+    contents = []
+
+    for doc in docs:
+        if not doc["content"] or len(doc["content"]) < 50:
+            continue
+        titles.append(doc["title"])
+        contents.append(doc["content"])
+        # Searchable text: title + first 500 chars of content
+        texts.append(f"{doc['title']}\n{doc['content'][:500]}")
+
+    print(f"Embedding {len(texts)} developer docs...")
+    embeddings = embed_batched(texts)
+
+    np.savez_compressed(
+        DEVDOCS_INDEX_PATH,
+        embeddings=embeddings,
+        titles=np.array(titles),
+        contents=np.array(contents),
+    )
+    print(f"Saved devdocs index: {embeddings.shape[0]} docs, {embeddings.shape[1]}d")
+
+
 def main():
     build_api_index()
     print()
     build_pattern_index()
+    print()
+    build_devdocs_index()
 
 
 if __name__ == "__main__":
