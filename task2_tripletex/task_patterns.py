@@ -95,12 +95,21 @@ Keywords: produkt, product, Produkt, producto, produit, produto
 |-------|-----|-----|
 | Product number in use? | Only if resubmitting | GET /product?number=N — if exists, use that ID |
 
+### Prerequisites (MUST check if VAT is mentioned)
+| Check | How | Why |
+|-------|-----|-----|
+| VAT type ID | GET /ledger/vatType?fields=id,number,name,percentage | If prompt specifies a VAT rate, find the matching outgoing vatType |
+
 ### Verified Workflow
-1. POST /product — {name, number, priceExcludingVatCurrency}
+1. If prompt specifies VAT rate: GET /ledger/vatType to find correct ID
+2. POST /product — {name, number, priceExcludingVatCurrency, vatType: {"id": N}}
+   - Only set vatType if the prompt explicitly asks for a specific VAT rate
+   - If no VAT mentioned, OMIT vatType (default id=6 = no VAT)
 
 ### Verified Field Gotchas
-- Do NOT set vatType — only default (id=6) works, others cause validation errors
 - Do NOT set account or currency — causes validation errors
+- vatType: only set if prompt specifies a VAT rate. Some sandbox configs reject non-default vatTypes.
+- If vatType fails, retry WITHOUT it — default (id=6, no VAT) always works
 - Price: priceExcludingVatCurrency for "eks. mva" / "without VAT", priceIncludingVatCurrency for "inkl. mva" / "with VAT"
 
 ---
