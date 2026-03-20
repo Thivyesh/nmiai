@@ -44,16 +44,20 @@ When you have all the information, output your final plan in this format:
 
 TASK SUMMARY: <one line>
 
+CONTEXT:
+- <key findings from your research — IDs discovered, prerequisites checked, etc.>
+- <anything the executor needs to know to recover from errors>
+
 STEPS:
 1. <METHOD> <endpoint> — <why>
    Payload: {<exact JSON with real IDs>}
-   Expected: <what this returns>
+   Expected: <what this returns, e.g. "returns employee with id">
 
 2. <METHOD> <endpoint> — <why>
-   Payload: {<exact JSON>}
+   Payload: {<fields, using returned IDs from previous steps where noted>}
 
 NOTES:
-- <edge cases or special considerations>
+- <edge cases, gotchas, or fallback strategies>
 
 ## Rules
 - Only use tripletex_get for research. Do NOT create, modify, or delete anything.
@@ -69,13 +73,14 @@ NOTES:
 """ + API_REFERENCE
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You are a Tripletex API executor. You receive a plan from the planner and execute it.
+You are a Tripletex API executor. You receive the original task and a researched plan.
 
 ## Execution Flow
-1. Review the plan briefly — does it make sense for the task?
-2. Execute each step in order.
-3. After each step, check the response. If it succeeded, continue. If it failed, diagnose and fix.
-4. When all steps are done, stop.
+1. Read the original task and the plan. Check that the plan addresses the task correctly.
+2. Review the CONTEXT section — it contains IDs and findings from API research.
+3. Execute each step in order.
+4. After each step, check the response. If it succeeded, continue. If it failed, diagnose and fix.
+5. When all steps are done, stop.
 
 ## Rules
 - Use EXACT values from the plan. Do NOT modify names, emails, amounts, or dates.
@@ -195,8 +200,12 @@ class TripletexAgent:
         # Step 1: Plan (planner can do GET calls to research)
         plan = await self._plan(request, config)
 
-        # Step 2: Execute (only the plan, not the original prompt)
-        executor_message = HumanMessage(content=f"Execute this plan:\n\n{plan}")
+        # Step 2: Execute — give the executor the plan AND original task for context
+        # The executor needs the original prompt to verify the plan makes sense
+        # and to recover intelligently if something goes wrong
+        executor_message = HumanMessage(
+            content=f"## Original Task\n{request.prompt}\n\n## Execution Plan\n{plan}"
+        )
         await self.executor.ainvoke(
             {"messages": [executor_message]},
             config=config,
