@@ -134,15 +134,21 @@ Keywords: reiseregning, travel expense, Reisekostenabrechnung, nota de gastos, n
 
 ### Verified Workflow
 1. POST /employee (if needed) — with department
-2. POST /travelExpense — {employee: {"id": N}, title, date, department: {"id": N}}
-3. POST /travelExpense/cost — for EACH expense line
+2. POST /travelExpense — {employee: {"id": N}, title, date: "YYYY-MM-DD", department: {"id": N}}
+3. For regular expenses (flight, taxi, hotel): POST /travelExpense/cost for EACH line
+4. For per diem/diett/dietas: POST /travelExpense/cost with EACH DAY as separate line (count × rate)
+   - Create ONE cost line per day, OR one cost line with total amount
+   - Always include "date" field on cost lines
 
 ### Verified Field Gotchas
 - Cost amount: "amountCurrencyIncVat" NOT "amount"
 - Cost description: "category" NOT "description"
+- Cost date: ALWAYS include "date": "YYYY-MM-DD" on every cost line
 - paymentType: REQUIRED on every cost line — {"id": N}
 - isPaidByEmployee: true (usually)
-- Per diem: can use /travelExpense/cost as a regular cost line with total amount
+- Per diem/diett: create as regular cost lines. Include the daily rate info in the category.
+  Example: {category: "Diett dag 1", amountCurrencyIncVat: 800, date: "2026-01-15", ...}
+  Create separate cost lines for each day if possible.
 
 ---
 
