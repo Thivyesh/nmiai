@@ -1,54 +1,73 @@
-"""LangGraph-based Tripletex accounting agent."""
+"""LangGraph-based Tripletex accounting agent with planner → executor architecture."""
 
 import base64
 import os
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langgraph.prebuilt import create_react_agent
 
+from task2_tripletex.api_reference import API_REFERENCE
 from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.tools import ALL_TOOLS, TripletexClient, set_client
 
-SYSTEM_PROMPT = """\
-You are an expert accounting agent for Tripletex, a Norwegian accounting system.
-You receive a task prompt (possibly in Norwegian, English, or other languages) and must
-execute the requested accounting operations using the Tripletex API.
+PLANNER_SYSTEM_PROMPT = """\
+You are an expert accounting task planner for Tripletex, a Norwegian accounting system.
+You receive a task prompt (in Norwegian, English, or other languages) and must create
+a precise, step-by-step execution plan.
+
+## Your Job
+1. Parse the prompt to extract: task type, entity names, field values, relationships.
+2. Identify which Tripletex API endpoints to call, in what order.
+3. Specify the exact HTTP method, endpoint, and payload for each step.
+4. Note any dependencies between steps (e.g., "use customer_id from step 1").
+
+## Output Format
+Return a structured plan like this:
+
+TASK SUMMARY: <one line describing what needs to be done>
+
+STEPS:
+1. <METHOD> <endpoint> — <why>
+   Payload: {<exact JSON fields to send>}
+   Save: <variable_name> = response.value.id
+
+2. <METHOD> <endpoint> — <why>
+   Payload: {<fields, referencing saved variables like ${customer_id}>}
+
+NOTES:
+- <any special considerations, edge cases, or verification steps>
+
+## Rules
+- Be precise with field names — they must match the API exactly.
+- Include ALL required and relevant fields from the prompt.
+- Minimize the number of API calls — efficiency is scored.
+- Do NOT include unnecessary GET calls unless needed to find existing resources.
+- For admin/kontoadministrator role, use userType="EXTENDED".
+- Always use the exact names, emails, amounts from the prompt — do not modify them.
+
+## API Reference
+""" + API_REFERENCE
+
+EXECUTOR_SYSTEM_PROMPT = """\
+You are an expert Tripletex API executor. You receive a plan and execute it step by step
+using the available tools.
 
 ## Guidelines
-- Parse the prompt carefully to extract entity names, field values, and relationships.
-- Plan your API calls before executing. Minimize the number of calls and avoid errors.
-- Some tasks require creating prerequisites first (e.g., create a customer before an invoice).
-- Use GET with ?fields=* to discover available fields when unsure.
+- Follow the plan precisely. Execute each step in order.
+- Use the exact field names and values from the plan.
+- After a POST/PUT, note the returned ID for use in subsequent steps.
+- If a step fails, read the error message carefully and adjust the payload — do not blindly retry.
+- Do NOT make API calls that are not in the plan unless a step fails and you need to adapt.
 - Norwegian characters (æ, ø, å) work fine — send as-is.
-- When the prompt includes file attachments, extract relevant data (names, amounts, dates) from them.
-- After completing operations, verify critical results with a GET call.
-- Do NOT make unnecessary API calls — efficiency is scored.
-
-## Common API Endpoints
-- /employee (GET, POST, PUT) — manage employees
-- /customer (GET, POST, PUT) — manage customers
-- /product (GET, POST) — manage products
-- /invoice (GET, POST) — create and query invoices
-- /order (GET, POST) — manage orders
-- /travelExpense (GET, POST, PUT, DELETE) — travel expense reports
-- /project (GET, POST) — manage projects
-- /department (GET, POST) — manage departments
-- /ledger/account (GET) — chart of accounts
-- /ledger/voucher (GET, POST, DELETE) — manage vouchers
-
-## API Tips
-- List responses are wrapped: {"fullResultSize": N, "values": [...]}
-- Use "fields" param to select specific fields: ?fields=id,firstName,lastName
-- POST/PUT take JSON body
-- DELETE uses ID in path: DELETE /employee/123
-- Auth is handled automatically — just specify the endpoint and data.
+- Every 4xx error hurts the efficiency score, so get it right the first time.
+- When done, do not make any extra verification calls unless the plan says to.
 """
 
 
 class TripletexAgent:
-    """Orchestrates the LangGraph ReAct agent for solving Tripletex tasks."""
+    """Orchestrates the planner → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
         self.llm = ChatAnthropic(
@@ -56,46 +75,46 @@ class TripletexAgent:
             max_tokens=4096,
             temperature=0,
         )
-        self.agent = create_react_agent(
+        self.executor = create_react_agent(
             model=self.llm,
             tools=ALL_TOOLS,
-            prompt=SYSTEM_PROMPT,
+            prompt=EXECUTOR_SYSTEM_PROMPT,
         )
 
-    def _build_messages(self, request: SolveRequest) -> list:
-        """Build the message list from the solve request."""
-        content_parts = [f"## Task\n\n{request.prompt}"]
-
-        if request.files:
-            content_parts.append("\n## Attached Files\n")
-            for f in request.files:
-                raw = base64.b64decode(f.content_base64)
-                if f.mime_type.startswith("image/"):
-                    content_parts.append(
-                        f"[Image file: {f.filename} ({f.mime_type}, {len(raw)} bytes) — "
-                        f"base64 content available]"
+    def _extract_file_content(self, request: SolveRequest) -> str:
+        """Extract text content from attached files."""
+        parts = []
+        for f in request.files:
+            raw = base64.b64decode(f.content_base64)
+            if f.mime_type.startswith("image/"):
+                parts.append(
+                    f"[Image file: {f.filename} ({f.mime_type}, {len(raw)} bytes)]"
+                )
+            else:
+                try:
+                    text = raw.decode("utf-8")
+                    parts.append(f"### {f.filename}\n```\n{text[:5000]}\n```")
+                except UnicodeDecodeError:
+                    parts.append(
+                        f"[Binary file: {f.filename} ({f.mime_type}, {len(raw)} bytes)]"
                     )
-                else:
-                    try:
-                        text = raw.decode("utf-8")
-                        content_parts.append(
-                            f"### {f.filename}\n```\n{text[:5000]}\n```"
-                        )
-                    except UnicodeDecodeError:
-                        content_parts.append(
-                            f"[Binary file: {f.filename} ({f.mime_type}, {len(raw)} bytes)]"
-                        )
+        return "\n".join(parts)
 
-        return [HumanMessage(content="\n".join(content_parts))]
+    async def _plan(self, request: SolveRequest, config: dict) -> str:
+        """Use the LLM to create an execution plan from the task prompt."""
+        content = f"## Task Prompt\n\n{request.prompt}"
+        if request.files:
+            content += f"\n\n## Attached Files\n\n{self._extract_file_content(request)}"
 
-    def _create_langfuse_handler(self) -> LangfuseCallbackHandler | None:
-        """Create Langfuse callback handler if credentials are configured."""
-        if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
-            return LangfuseCallbackHandler()
-        return None
+        messages = [
+            SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+            HumanMessage(content=content),
+        ]
+        response = await self.llm.ainvoke(messages, config=config)
+        return response.content
 
     async def solve(self, request: SolveRequest) -> SolveResponse:
-        """Run the agent to solve a Tripletex accounting task."""
+        """Run the planner → executor pipeline to solve a Tripletex task."""
         # Initialize the Tripletex API client for this request
         client = TripletexClient(
             base_url=request.tripletex_credentials.base_url,
@@ -103,18 +122,28 @@ class TripletexAgent:
         )
         set_client(client)
 
-        messages = self._build_messages(request)
-
-        # Configure Langfuse tracing callback
+        # Configure Langfuse tracing
         config: dict = {}
         langfuse_handler = self._create_langfuse_handler()
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Run the LangGraph ReAct agent
-        await self.agent.ainvoke(
-            {"messages": messages},
+        # Step 1: Plan
+        plan = await self._plan(request, config)
+
+        # Step 2: Execute
+        executor_message = HumanMessage(
+            content=f"## Original Task\n\n{request.prompt}\n\n## Execution Plan\n\n{plan}"
+        )
+        await self.executor.ainvoke(
+            {"messages": [executor_message]},
             config=config,
         )
 
         return SolveResponse(status="completed")
+
+    def _create_langfuse_handler(self) -> LangfuseCallbackHandler | None:
+        """Create Langfuse callback handler if credentials are configured."""
+        if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
+            return LangfuseCallbackHandler()
+        return None

@@ -1,6 +1,11 @@
 """FastAPI entrypoint for the Tripletex accounting agent."""
 
 import logging
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -17,13 +22,17 @@ agent = TripletexAgent()
 
 @app.post("/solve")
 async def solve(request: dict):
-    solve_request = SolveRequest.from_dict(request)
-    logger.info("Received task: %s", solve_request.prompt[:100])
+    try:
+        solve_request = SolveRequest.from_dict(request)
+        logger.info("Received task: %s", solve_request.prompt[:100])
 
-    response = await agent.solve(solve_request)
+        response = await agent.solve(solve_request)
 
-    logger.info("Task completed with status: %s", response.status)
-    return JSONResponse(response.to_dict())
+        logger.info("Task completed with status: %s", response.status)
+        return JSONResponse(response.to_dict())
+    except Exception as e:
+        logger.exception("Error solving task")
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
 
 
 @app.get("/health")

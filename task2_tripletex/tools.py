@@ -13,40 +13,39 @@ class TripletexClient:
         self.base_url = base_url.rstrip("/")
         self.auth = ("0", session_token)
 
-    def get(self, endpoint: str, params: dict | None = None) -> dict:
-        resp = requests.get(
+    def _request(self, method: str, endpoint: str, **kwargs) -> dict:
+        resp = requests.request(
+            method,
             f"{self.base_url}/{endpoint.lstrip('/')}",
             auth=self.auth,
-            params=params,
+            **kwargs,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = resp.text
+            return {"_error": True, "status_code": resp.status_code, "detail": error_body}
+        if method == "DELETE" or not resp.content:
+            return {"_success": True, "status_code": resp.status_code}
         return resp.json()
+
+    def get(self, endpoint: str, params: dict | None = None) -> dict:
+        return self._request("GET", endpoint, params=params)
 
     def post(self, endpoint: str, data: dict) -> dict:
-        resp = requests.post(
-            f"{self.base_url}/{endpoint.lstrip('/')}",
-            auth=self.auth,
-            json=data,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", endpoint, json=data)
 
-    def put(self, endpoint: str, data: dict) -> dict:
-        resp = requests.put(
-            f"{self.base_url}/{endpoint.lstrip('/')}",
-            auth=self.auth,
-            json=data,
-        )
-        resp.raise_for_status()
-        return resp.json()
+    def put(self, endpoint: str, data: dict | None = None, params: dict | None = None) -> dict:
+        kwargs = {}
+        if data:
+            kwargs["json"] = data
+        if params:
+            kwargs["params"] = params
+        return self._request("PUT", endpoint, **kwargs)
 
-    def delete(self, endpoint: str) -> int:
-        resp = requests.delete(
-            f"{self.base_url}/{endpoint.lstrip('/')}",
-            auth=self.auth,
-        )
-        resp.raise_for_status()
-        return resp.status_code
+    def delete(self, endpoint: str) -> dict:
+        return self._request("DELETE", endpoint)
 
 
 # Module-level client reference, set at runtime by the agent
@@ -99,19 +98,23 @@ def tripletex_post(endpoint: str, body: str) -> str:
 
 
 @tool
-def tripletex_put(endpoint: str, body: str) -> str:
+def tripletex_put(endpoint: str, body: str = "{}", params: str = "{}") -> str:
     """PUT to a Tripletex API endpoint to update a resource.
 
     Args:
         endpoint: API path, e.g. "/employee/123", "/customer/456".
-        body: JSON string of the request body.
+            Can include query params in the URL for action endpoints, e.g.
+            "/employee/entitlement/:grantEntitlementsByTemplate?employeeId=123&template=ALL_PRIVILEGES"
+        body: JSON string of the request body. Use "{}" if no body needed.
+        params: JSON string of query parameters. Alternative to putting params in the URL.
 
     Returns:
         JSON response as string.
     """
     client = _get_client()
-    data = json.loads(body)
-    result = client.put(endpoint, data)
+    data = json.loads(body) if body and body != "{}" else None
+    parsed_params = json.loads(params) if params and params != "{}" else None
+    result = client.put(endpoint, data, params=parsed_params)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
