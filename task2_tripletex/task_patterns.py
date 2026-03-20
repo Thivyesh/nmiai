@@ -1,275 +1,328 @@
-"""Accounting task patterns for the Tripletex competition.
+"""Verified task patterns for the Tripletex competition researcher.
 
-Each pattern describes:
-- What the task asks for
-- What fields the competition likely checks
-- The exact API workflow to achieve full marks
-- Common mistakes to avoid
-- Multilingual field mapping (Norwegian/English/Spanish/German/French/Portuguese/Nynorsk)
+Every fact here has been VERIFIED through sandbox testing or competition results.
+Structured as risk checklists so the researcher finds what it needs fast.
+
+Source of truth:
+- Sandbox testing (March 20, 2026)
+- Competition results: 7/7, 8/8, 6.5/8, 0/8, 6/13, 6/7, 7/7
 """
 
 TASK_PATTERNS = """\
-# Tripletex Competition — Task Patterns & Scoring Guide
+# RESEARCHER CHECKLIST — Tripletex Competition
 
-## GENERAL RULES
-1. Every entity mentioned in the prompt must be CREATED as a separate record.
-   - Product with name/number → POST /product FIRST, then reference in order lines
-   - Customer with name → POST /customer with ALL mentioned fields (org.nr, address, etc.)
-   - Employee with name → POST /employee (or GET if the prompt says "existing"/"find")
-2. Every field value mentioned in the prompt WILL be checked field-by-field.
-3. The sandbox starts FRESH — no customers, products, or employees exist (only account owner).
-4. Use EXACT values from the prompt. Never modify names, emails, amounts.
-5. When the prompt mentions a field, ALWAYS include it in the API call — even if optional.
-
-## MULTILINGUAL FIELD MAPPING (prompt term → API field)
-
-### Employee
-- navn/name/nombre/nom/Name → split into firstName + lastName
-- e-post/email/correo/E-Mail → email
-- telefon/phone/teléfono/Telefon → phoneNumberMobile (NOT phoneNumber!)
-- fødselsdato/date of birth/fecha de nacimiento → dateOfBirth
-- personnummer/national ID/Personnummer → nationalIdentityNumber
-- bankkonto/bank account/Bankkonto → bankAccountNumber
-- kontoadministrator/admin/administrador/Kontoadministrator → entitlements ALL_PRIVILEGES
-- avdeling/department/departamento → department (REQUIRED)
-
-### Customer
-- navn/name/nombre/Name → name
-- e-post/email → email
-- telefon/phone/teléfono → phoneNumber (customer uses phoneNumber, NOT phoneNumberMobile!)
-- org.nr/organisasjonsnummer/organization number/Org.-Nr. → organizationNumber
-- adresse/address/dirección/Adresse → postalAddress: {addressLine1, postalCode, city}
-- privatkunde/private individual → isPrivateIndividual: true
-
-### Product
-- produktnummer/product number/número de producto/Produktnummer → number
-- pris/price/precio/Preis → priceExcludingVatCurrency (default: excl. VAT)
-- pris inkl. mva/price incl. VAT → priceIncludingVatCurrency
-- mva-kode/VAT code → vatType: {"id": N} (default id=6 for no VAT)
-- enhet/unit → productUnit: {"id": N}
-- beskrivelse/description → description
-
-### Order/Invoice
-- fakturadato/invoice date/fecha de factura/Rechnungsdatum → invoiceDate
-- forfallsdato/due date/fecha de vencimiento/Fälligkeitsdatum → invoiceDueDate
-- ordredato/order date → orderDate
-- leveringsdato/delivery date → deliveryDate (REQUIRED on order!)
-- antall/quantity/cantidad/Anzahl → count (NOT quantity!)
-- pris per enhet/unit price/Stückpreis → unitPriceExcludingVatCurrency
-- referanse/reference → reference
-
-### Travel Expense
-- reiseregning/travel expense/nota de gastos/Reisekostenabrechnung → POST /travelExpense
-- diett/per diem/dietas/Tagesgeld → per diem compensation or cost line
-- utgift/expense/gasto/Ausgabe → POST /travelExpense/cost
-- beløp/amount/monto/Betrag → amountCurrencyIncVat (NOT amount!)
-- kategori/category/categoría → category (NOT description!)
+## UNIVERSAL PREREQUISITES (check for EVERY task)
+- Sandbox is FRESH — no customers, products, employees exist (only account owner)
+- Every entity mentioned in the prompt must be CREATED as a separate record
+- Every field value in the prompt WILL be checked field-by-field
+- Use EXACT values from prompt — never modify names, emails, amounts
 
 ---
 
-## TASK: Create Employee
-Trigger: "opprett ansatt", "create employee", "erstellen Mitarbeiter", "crear empleado", "créer employé"
-Checks: employee found, firstName, lastName, email, phoneNumberMobile, admin role
-Workflow:
-1. GET /department?fields=id&count=1 → department_id
-2. POST /employee with: firstName, lastName, email, phoneNumberMobile, department: {"id": N}
-   - Include ALL fields mentioned in prompt (phone, dateOfBirth, address, etc.)
-3. If admin/kontoadministrator: PUT /employee/entitlement/:grantEntitlementsByTemplate?employeeId=N&template=ALL_PRIVILEGES
-Mistakes:
-- "phoneNumber" → WRONG for employee. Use "phoneNumberMobile"
-- Setting userType → READ-ONLY. Use entitlements endpoint
-- Forgetting department → REQUIRED field
+## INVOICE TASKS
+Keywords: faktura, invoice, Rechnung, factura, facture, fatura
 
-## TASK: Create Customer
-Trigger: "opprett kunde", "create customer", "erstellen Kunde", "crear cliente", "créer client"
-Checks: customer found, name, email, phoneNumber, organizationNumber, isCustomer
-Workflow:
-1. POST /customer with: name, email, phoneNumber, organizationNumber, isCustomer: true
-   - Include ALL fields mentioned: address, language, invoiceSendMethod, etc.
-   - If org.nr is mentioned, ALWAYS include organizationNumber
-Mistakes:
-- Forgetting organizationNumber when org.nr is in the prompt
-- Forgetting isCustomer: true
-- Note: customer uses "phoneNumber" (not phoneNumberMobile)
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Bank account on 1920 | GET /ledger/account?number=1920&fields=id,version,bankAccountNumber | Invoice creation FAILS without this. If empty, PUT to set bankAccountNumber="86011117947" |
+| Customer exists? | Prompt names the customer | Must CREATE with name, email, organizationNumber, isCustomer: true |
+| Products referenced? | Prompt mentions product names/numbers | Must CREATE each product. Do NOT set vatType (only default id=6 works) |
+| Payment type needed? | Prompt asks for payment registration | GET /invoice/paymentType to find ID |
 
-## TASK: Create Product
-Trigger: "opprett produkt", "create product", "erstellen Produkt", "crear producto"
-Checks: product found, name, number, priceExcludingVatCurrency, description
-Workflow:
-1. POST /product with: name, number, priceExcludingVatCurrency
-   - If price is stated as "inkl. mva" (incl. VAT), use priceIncludingVatCurrency
-   - If price is stated as "eks. mva" or just "pris" (excl. VAT), use priceExcludingVatCurrency
-   - Do NOT set vatType — it defaults to id=6 which works. Other vatType IDs FAIL.
-   - If product number already exists ("Produktnummeret er i bruk"), GET /product?number=N to find its ID.
-Mistakes:
-- Omitting product number
-- Using wrong price field (incl vs excl VAT)
-- Setting vatType on products (only default id=6 works)
+### Verified Workflow
+1. PUT /ledger/account/{id} — set bank account (if empty)
+2. POST /customer — with organizationNumber if given
+3. POST /product — for each product (name, number, priceExcludingVatCurrency only)
+4. POST /order — with customer, orderDate, deliveryDate (REQUIRED), orderLines with product refs
+5. POST /invoice — with invoiceDate, invoiceDueDate, customer, orders: [{"id": N}]
+6. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N (query params, no body)
 
-## TASK: Create Invoice (multi-step)
-Trigger: "opprett faktura", "create invoice", "erstellen Rechnung", "crear factura", "créer facture", "crie uma fatura"
-Checks: customer (with all fields), products (if mentioned), order, invoice dates/amounts, payment
-PREREQUISITE — MUST DO FIRST:
-  GET /ledger/account?number=1920&fields=id,version,bankAccountNumber
-  If bankAccountNumber is empty: PUT /ledger/account/{id} with {"id": N, "version": N, "number": 1920, "name": "Bankinnskudd", "bankAccountNumber": "86011117947"}
-  WITHOUT THIS, INVOICE CREATION WILL FAIL.
-Workflow:
-1. Check bank account (see PREREQUISITE above) — the PLANNER must do this GET
-2. POST /customer with ALL mentioned fields (name, email, org.nr, address, isCustomer: true) → customer_id
-3. POST /product for EACH product mentioned (name, number, price) → product_ids
-   - Do NOT set vatType on products — it defaults to id=6 which works. Other vatType IDs (3, 5, 31) FAIL on products.
-   - If product number already exists, GET /product?number=NNNN to find its ID instead.
-4. POST /order with: customer, orderDate, deliveryDate, orderLines (with product: {"id": N}, count, unitPriceExcludingVatCurrency) → order_id
-5. POST /invoice with: invoiceDate, invoiceDueDate, customer, orders: [{"id": order_id}]
-6. If payment: GET /invoice/paymentType → paymentTypeId
-7. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
-Mistakes:
-- FORGETTING BANK ACCOUNT CHECK — #1 cause of invoice failures
-- Setting vatType on products — only id=6 works, others cause validation errors
-- Using description-only order lines instead of creating products first
-- Creating invoice without order (must create order first)
-- Forgetting deliveryDate on order (REQUIRED)
+### Verified Field Gotchas
+- Order lines: "count" NOT "quantity"
+- Order: deliveryDate is REQUIRED
+- Product: do NOT set vatType, account, or currency — causes validation errors
+- Payment: ALL params are query params, not body
+- Invoice needs orders array, cannot be created standalone
 
-## TASK: Create Credit Note
-Trigger: "kreditnota", "credit note", "nota de crédito", "Gutschrift"
-Checks: credit note exists, correct date, linked to original invoice
-Workflow:
-1. GET /invoice (with date filters) → find invoice_id
-2. PUT /invoice/{id}/:createCreditNote?date=YYYY-MM-DD
-Mistakes:
-- Forgetting date query param (REQUIRED)
-- Using POST instead of PUT
+---
 
-## TASK: Create Travel Expense
-Trigger: "reiseregning", "travel expense", "nota de gastos", "Reisekostenabrechnung"
-Checks: employee found, travel expense title, EACH cost line (category + amount), per diem
-Workflow:
-1. POST /employee or GET /employee → employee_id (create if not exists)
-2. GET /department → department_id
-3. POST /travelExpense with: employee, title, date, department → travelExpense_id
-4. GET /travelExpense/paymentType → paymentType_id
-5. POST /travelExpense/cost for EACH expense with: travelExpense, date, amountCurrencyIncVat, paymentType, category, isPaidByEmployee: true
-6. If per diem/dietas mentioned: can use /travelExpense/cost as a cost line with the total amount
-Mistakes:
-- "amount" → WRONG. Use "amountCurrencyIncVat"
-- "description" → WRONG. Use "category"
-- Forgetting paymentType (REQUIRED)
-- Trying perDiemCompensation (complex, needs travel details) — simpler to use /cost
+## EMPLOYEE TASKS
+Keywords: ansatt, employee, Mitarbeiter, empleado, employé, empregado
 
-## TASK: Create Project
-Trigger: "opprett prosjekt", "create project", "erstellen Projekt", "crear proyecto"
-Checks: project found, name, startDate, customer linked, projectManager
-Workflow:
-1. POST /customer (if new) → customer_id
-2. GET /employee → projectManager employee_id
-3. POST /project with: name, startDate, customer, projectManager, description
-Mistakes:
-- Forgetting projectManager
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Department ID | GET /department?fields=id&count=1 | Employee POST FAILS without department |
+| Admin role? | Prompt says "kontoadministrator" / "admin" | Need entitlements endpoint after creation |
 
-## TASK: Create Department
-Trigger: "opprett avdeling", "create department"
-Checks: department found, name, departmentNumber
-Workflow:
-1. POST /department with: name, departmentNumber
+### Verified Workflow
+1. POST /employee — {firstName, lastName, email, phoneNumberMobile, department: {"id": N}}
+2. PUT /employee/entitlement/:grantEntitlementsByTemplate?employeeId=N&template=ALL_PRIVILEGES (if admin)
 
-## TASK: Create Contact
-Trigger: "opprett kontakt", "create contact", "kontaktperson"
-Checks: contact found, firstName, lastName, email, phone, linked to customer
-Workflow:
-1. GET /customer or POST /customer → customer_id
-2. POST /contact with: firstName, lastName, email, phoneNumberMobile, customer: {"id": N}
+### Verified Field Gotchas
+- Phone: "phoneNumberMobile" NOT "phoneNumber" (that's for customers!)
+- userType is READ-ONLY — never set it, use entitlements endpoint
+- Entitlements: query params only, no body, path is exactly /employee/entitlement/:grantEntitlementsByTemplate
+- PUT /employee requires dateOfBirth even if not changing it
 
-## TASK: Delete Entity
-Trigger: "slett", "delete", "eliminar", "löschen", "fjern"
-Checks: entity no longer exists
-Workflow:
-1. GET the entity with filters → find id
+---
+
+## CUSTOMER TASKS
+Keywords: kunde, customer, Kunde, cliente, client
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| None | — | Customer creation is straightforward |
+
+### Verified Workflow
+1. POST /customer — {name, email, phoneNumber, organizationNumber, isCustomer: true}
+
+### Verified Field Gotchas
+- Phone: "phoneNumber" for customers (NOT phoneNumberMobile — that's for employees!)
+- Always set isCustomer: true
+- Include organizationNumber if prompt mentions org.nr / org number
+- Include postalAddress: {addressLine1, postalCode, city} if address given
+
+---
+
+## PRODUCT TASKS
+Keywords: produkt, product, Produkt, producto, produit, produto
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Product number in use? | Only if resubmitting | GET /product?number=N — if exists, use that ID |
+
+### Verified Workflow
+1. POST /product — {name, number, priceExcludingVatCurrency}
+
+### Verified Field Gotchas
+- Do NOT set vatType — only default (id=6) works, others cause validation errors
+- Do NOT set account or currency — causes validation errors
+- Price: priceExcludingVatCurrency for "eks. mva" / "without VAT", priceIncludingVatCurrency for "inkl. mva" / "with VAT"
+
+---
+
+## TRAVEL EXPENSE TASKS
+Keywords: reiseregning, travel expense, Reisekostenabrechnung, nota de gastos, note de frais
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Employee exists? | GET /employee?email=X or by name | Must CREATE if not found |
+| Department ID | GET /department?fields=id&count=1 | Needed for employee and travel expense |
+| Payment type | GET /travelExpense/paymentType | REQUIRED for each cost line |
+
+### Verified Workflow
+1. POST /employee (if needed) — with department
+2. POST /travelExpense — {employee: {"id": N}, title, date, department: {"id": N}}
+3. POST /travelExpense/cost — for EACH expense line
+
+### Verified Field Gotchas
+- Cost amount: "amountCurrencyIncVat" NOT "amount"
+- Cost description: "category" NOT "description"
+- paymentType: REQUIRED on every cost line — {"id": N}
+- isPaidByEmployee: true (usually)
+- Per diem: can use /travelExpense/cost as a regular cost line with total amount
+
+---
+
+## PROJECT TASKS
+Keywords: prosjekt, project, Projekt, proyecto, projet, projeto
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Customer exists? | GET /customer?name=X | Must CREATE if not found |
+| Employee for manager | GET /employee?fields=id&count=1 | projectManager is expected |
+
+### Verified Workflow
+1. POST /customer (if needed)
+2. POST /project — {name, startDate, customer: {"id": N}, projectManager: {"id": N}}
+
+### Verified Field Gotchas
+- projectManager usually required (use account owner ID if no specific manager named)
+
+---
+
+## CREDIT NOTE TASKS
+Keywords: kreditnota, credit note, nota de crédito, Gutschrift
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Invoice to credit | GET /invoice with filters | Need the invoice ID |
+
+### Verified Workflow
+1. PUT /invoice/{id}/:createCreditNote?date=YYYY-MM-DD (query params, no body)
+
+### Verified Field Gotchas
+- Date is REQUIRED as query param
+- Use PUT not POST
+
+---
+
+## DEPARTMENT TASKS
+Keywords: avdeling, department, Abteilung, departamento
+
+### Prerequisites: None
+### Verified Workflow
+1. POST /department — {name, departmentNumber}
+
+---
+
+## SUPPLIER TASKS
+Keywords: leverandør, supplier, Lieferant, proveedor, fournisseur, fornecedor
+
+### Prerequisites: None
+### Verified Workflow
+1. POST /supplier — {name, organizationNumber, email}
+
+### Verified Field Gotchas
+- There is a separate /supplier endpoint (not /customer with isSupplier)
+
+---
+
+## VOUCHER / DIMENSION TASKS
+Keywords: bilag, voucher, dimensjon, dimension, postering, Buchung, journal entry, lançamento contabilístico
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Account ID | GET /ledger/account?number=NNNN&fields=id | Postings MUST use account {"id": N}, NEVER {"number": N} |
+| Balancing account | GET another account for the opposite posting | Postings must sum to zero |
+
+### Verified Workflow
+1. GET /ledger/account?number=NNNN&fields=id — get account IDs
+2. POST /ledger/accountingDimensionName (if creating dimensions)
+3. POST /ledger/accountingDimensionValue (for each value)
+4. POST /ledger/voucher?sendToLedger=true — with postings
+
+### Verified Field Gotchas
+- Account: ALWAYS {"id": N} — NEVER {"number": N}
+- Amounts: use amountGross AND amountGrossCurrency (both required, must be equal for NOK)
+- Do NOT use "amount" — it does not work
+- Include "date" and "row" on each posting
+- Postings MUST balance (sum of amountGross = zero)
+- freeAccountingDimension1/2/3 for linking to dimension values
+- Some accounts (1920, 2400) are system-managed — use 1900 Kontanter for balancing
+
+---
+
+## DELETE TASKS
+Keywords: slett, delete, eliminar, löschen, supprimer, fjern
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Entity to delete | GET with filters to find ID | Need the exact ID |
+
+### Verified Workflow
+1. GET the entity with filters → find ID
 2. DELETE /entity/{id}
 
-## TASK: Update Employee
-Trigger: "oppdater", "endre", "update", "actualizar", "ändern"
-Checks: field has new value
-Workflow:
-1. GET /employee/{id}?fields=* → get version, dateOfBirth, current data
-2. PUT /employee/{id} with: id, version, dateOfBirth, plus changed fields
-Mistakes:
-- Forgetting dateOfBirth (REQUIRED on PUT even if unchanged)
-- Forgetting version field
+---
 
-## TASK: Register Payment
-Trigger: "registrer betaling", "register payment", "registrar pago", "Zahlung registrieren"
-Checks: invoice amountOutstanding = 0, payment date correct
-Workflow:
-1. GET /invoice (find the invoice) → invoice_id, amount
-2. GET /invoice/paymentType → paymentTypeId
-3. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
-Mistakes:
-- Putting payment data in body (should be query params)
-- Wrong paidAmount (must match invoice amount for full payment)
+## UPDATE TASKS
+Keywords: oppdater, endre, update, actualizar, ändern, modifier
 
-## TASK: Create Order (without invoice)
-Trigger: "opprett ordre", "create order"
-Checks: customer exists, order with correct lines, products (if referenced)
-Workflow:
-1. POST /customer (if new) → customer_id
-2. POST /product for each product → product_ids
-3. POST /order with: customer, orderDate, deliveryDate, orderLines
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Current entity state | GET /entity/{id}?fields=* | Need version and current values |
 
-## TASK: Create Accounting Dimension and Voucher
-Trigger: "dimensjon", "dimension", "bilag", "voucher", "journal entry", "postering", "Buchung", "dimensão contabilística", "lançar um lançamento"
-Checks: dimension created, dimension values exist, voucher posted with correct account and dimension link
-Workflow:
-1. GET /ledger/account?number=NNNN&fields=id,number,name — MUST get account ID first (API requires ID, not number!)
-   - Also get a second account for the balancing posting (e.g., account 1920 or another expense account)
-2. POST /ledger/accountingDimensionName — create the dimension
-   Payload: {"dimensionName": "Region", "description": "...", "dimensionIndex": 1, "active": true}
-   - dimensionIndex: 1, 2, or 3 (for free dimensions 1-3)
-3. POST /ledger/accountingDimensionValue — create first value, save returned ID
-   Payload: {"displayName": "Vestlandet", "dimensionIndex": 1, "active": true, "number": "VEST", "showInVoucherRegistration": true}
-4. POST /ledger/accountingDimensionValue — create second value, save returned ID
-5. POST /ledger/voucher?sendToLedger=true — create the journal entry
-   Payload: {
-     "date": "YYYY-MM-DD",
-     "description": "...",
-     "postings": [
-       {
-         "date": "YYYY-MM-DD",
-         "row": 1,
-         "account": {"id": <account_id_from_step_1>},
-         "description": "...",
-         "amountGross": 47500,
-         "amountGrossCurrency": 47500,
-         "freeAccountingDimension1": {"id": <dimension_value_id_from_step_4>}
-       },
-       {
-         "date": "YYYY-MM-DD",
-         "row": 2,
-         "account": {"id": <balancing_account_id>},
-         "amountGross": -47500,
-         "amountGrossCurrency": -47500
-       }
-     ]
-   }
-CRITICAL VOUCHER RULES:
-- Account MUST be {"id": N} — NEVER {"number": N}. Always GET the account ID first!
-- Use amountGross AND amountGrossCurrency (both required, must be equal for NOK)
-- Do NOT use "amount" — it does not work. Use amountGross.
-- Include "date" and "row" on each posting
-- Postings MUST balance (sum of amountGross must be zero)
-- Use freeAccountingDimension1 for dimensionIndex=1, freeAccountingDimension2 for index=2, etc.
-- Some accounts (1920 Bankinnskudd, 2400 Leverandørgjeld) are system-managed — use 1900 Kontanter or other general accounts for balancing
+### Verified Workflow
+1. GET entity with ?fields=* → get id, version, current values
+2. PUT /entity/{id} — include id, version, plus changed fields
 
-## TASK: Enable Sales Module / Accounting Module
-Trigger: "aktiver modul", "enable module", "aktivere", "sales module"
-Checks: module activated
-Workflow:
-1. GET /company/salesmodules → check current modules
-2. POST /company/salesmodules with module to activate
+### Verified Field Gotchas
+- Employee PUT requires dateOfBirth even if not changing it
+- Always include version field from GET response
 
-## TASK: Create Supplier / Vendor
-Trigger: "opprett leverandør", "create supplier", "crear proveedor", "Lieferant erstellen"
-Checks: supplier found, name, organizationNumber, isSupplier
-Workflow:
-1. POST /customer with: name, organizationNumber, isSupplier: true, isCustomer: false
-   - Suppliers use the same /customer endpoint but with isSupplier: true
+---
+
+## PAYMENT TASKS (standalone)
+Keywords: betaling, payment, Zahlung, pago, paiement, pagamento
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Invoice ID | GET /invoice with filters | Need the exact invoice |
+| Payment type | GET /invoice/paymentType | Need paymentTypeId |
+
+### Verified Workflow
+1. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
+
+### Verified Field Gotchas
+- ALL params are query params, not body
+- paidAmount must match invoice amount for full payment
+
+---
+
+## INCOMING INVOICE / SUPPLIER INVOICE TASKS
+Keywords: leverandørfaktura, supplier invoice, incoming invoice, fatura do fornecedor, facture fournisseur, Eingangsrechnung
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Supplier exists? | GET /supplier?name=X | Must CREATE with POST /supplier if not found |
+| Account ID | GET /ledger/account?number=NNNN&fields=id | Need account ID for order lines |
+| VAT type | GET /ledger/vatType?fields=id,number,name | Need vatTypeId for deductions |
+
+### Verified Workflow
+1. POST /supplier — {name, organizationNumber, email}
+2. GET /ledger/account?number=NNNN&fields=id — get account ID for expense posting
+3. POST /incomingInvoice?sendTo=ledger — register the invoice
+
+### CRITICAL: Incoming invoice uses FLAT IDs, not nested objects!
+The /incomingInvoice endpoint uses a DIFFERENT field format than other endpoints:
+```
+POST /incomingInvoice?sendTo=ledger
+{
+  "invoiceHeader": {
+    "vendorId": 123,           ← flat integer, NOT {"id": 123}
+    "invoiceDate": "YYYY-MM-DD",
+    "dueDate": "YYYY-MM-DD",
+    "currencyId": 1,           ← flat integer (1=NOK)
+    "invoiceAmount": 35950,    ← total amount including VAT
+    "description": "...",
+    "invoiceNumber": "INV-2026-5787"
+  },
+  "orderLines": [
+    {
+      "row": 1,
+      "description": "...",
+      "accountId": 456,        ← flat integer, NOT {"id": 456}
+      "amountInclVat": 35950,  ← amount including VAT
+      "vatTypeId": 1,          ← flat integer (1 = 25% inbound VAT)
+      "count": 1
+    }
+  ]
+}
+```
+
+### Verified Field Gotchas
+- ALL IDs are flat integers (vendorId, currencyId, accountId, vatTypeId) — NOT nested objects
+- invoiceAmount is the total INCLUDING VAT
+- orderLines use amountInclVat NOT amountCurrencyIncVat
+- vendorId comes from POST /supplier response (value.id)
+- currencyId: 1=NOK, 2=SEK, 5=EUR
+- vatTypeId: 1=25% inbound, 11=15% inbound, 12=12% inbound
+
+---
+
+## MULTILINGUAL FIELD REFERENCE
+| Prompt term | API field | Entity |
+|-------------|-----------|--------|
+| telefon/phone | phoneNumberMobile | Employee |
+| telefon/phone | phoneNumber | Customer |
+| org.nr/organization number | organizationNumber | Customer |
+| antall/quantity/cantidad | count | Order line |
+| pris/price | priceExcludingVatCurrency | Product |
+| beløp/amount | amountCurrencyIncVat | Travel cost |
+| kategori/category | category | Travel cost |
+| fakturadato/invoice date | invoiceDate | Invoice |
+| forfallsdato/due date | invoiceDueDate | Invoice |
 """

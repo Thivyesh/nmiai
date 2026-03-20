@@ -44,7 +44,7 @@ def _build_pattern_sections() -> list[tuple[str, str]]:
     current_title = ""
     current_lines = []
     for line in TASK_PATTERNS.split("\n"):
-        if line.startswith("## TASK:") or line.startswith("## GENERAL") or line.startswith("## MULTILINGUAL"):
+        if line.startswith("## "):
             if current_title and current_lines:
                 sections.append((current_title, "\n".join(current_lines)))
             current_title = line.replace("## ", "").strip()

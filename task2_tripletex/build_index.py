@@ -83,12 +83,7 @@ def build_pattern_index():
     current_lines = []
 
     for line in TASK_PATTERNS.split("\n"):
-        if line.startswith("## TASK:") or line.startswith("## GENERAL"):
-            if current_title and current_lines:
-                sections.append((current_title, "\n".join(current_lines)))
-            current_title = line.replace("## ", "").strip()
-            current_lines = [line]
-        elif line.startswith("## MULTILINGUAL"):
+        if line.startswith("## "):
             if current_title and current_lines:
                 sections.append((current_title, "\n".join(current_lines)))
             current_title = line.replace("## ", "").strip()
