@@ -260,21 +260,52 @@ Keywords: oppdater, endre, update, actualizar, ändern, modifier
 
 ---
 
-## PAYMENT TASKS (standalone)
-Keywords: betaling, payment, Zahlung, pago, paiement, pagamento
+## PAYMENT TASKS (register payment)
+Keywords: betaling, payment, Zahlung, pago, paiement, pagamento, registrer betaling
 
 ### Prerequisites (MUST check)
 | Check | How | Why |
 |-------|-----|-----|
-| Invoice ID | GET /invoice with filters | Need the exact invoice |
+| Invoice ID | GET /invoice with date filters (invoiceDateFrom, invoiceDateTo REQUIRED) | Need the exact invoice |
 | Payment type | GET /invoice/paymentType | Need paymentTypeId |
 
 ### Verified Workflow
-1. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
+1. GET /invoice?invoiceDateFrom=YYYY-01-01&invoiceDateTo=YYYY-12-31&customerId=N — find the invoice
+2. GET /invoice/paymentType — find paymentTypeId
+3. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
 
 ### Verified Field Gotchas
-- ALL params are query params, not body
+- ALL params are query params, NOT body. Pass body="{}"
+- GET /invoice REQUIRES invoiceDateFrom AND invoiceDateTo — will fail without them
 - paidAmount must match invoice amount for full payment
+
+---
+
+## PAYMENT REVERSAL / CANCELLATION TASKS
+Keywords: tilbakeføring, stornering, reversering, zurückgebucht, stornieren, reverse payment, cancel payment, annuler paiement, estornar pagamento
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Invoice ID | GET /invoice with date filters | Need the invoice that was paid |
+| Payment type | GET /invoice/paymentType | Need paymentTypeId |
+| Invoice amount | From GET /invoice response | Need exact amount for negative payment |
+
+### Verified Workflow (negative payment method)
+1. GET /invoice?invoiceDateFrom=YYYY-01-01&invoiceDateTo=YYYY-12-31&customerId=N — find the paid invoice
+2. GET /invoice/paymentType — find paymentTypeId
+3. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=-AMOUNT (NEGATIVE amount reverses payment)
+
+### Alternative: Voucher reversal method
+If the invoice has a voucher, you can reverse it:
+1. GET /invoice/{id}?fields=voucher — get the voucher ID
+2. PUT /ledger/voucher/{voucherId}/:reverse — reverses the voucher
+
+### Verified Field Gotchas
+- Use NEGATIVE paidAmount to reverse a payment (e.g., paidAmount=-55375)
+- ALL params are query params, NOT body
+- The invoice must already have a payment registered to reverse it
+- After reversal, invoice amountOutstanding should equal the original amount
 
 ---
 
