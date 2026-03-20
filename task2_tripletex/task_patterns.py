@@ -205,4 +205,59 @@ Workflow:
 1. POST /customer (if new) → customer_id
 2. POST /product for each product → product_ids
 3. POST /order with: customer, orderDate, deliveryDate, orderLines
+
+## TASK: Create Accounting Dimension and Voucher
+Trigger: "dimensjon", "dimension", "bilag", "voucher", "journal entry", "postering", "Buchung"
+Checks: dimension created, dimension values exist, voucher posted with correct account and dimension link
+Workflow:
+1. POST /ledger/accountingDimensionName — create the dimension
+   Payload: {"dimensionName": "Region", "description": "...", "dimensionIndex": 1, "active": true}
+   - dimensionIndex: 1, 2, or 3 (for free dimensions 1-3)
+2. POST /ledger/accountingDimensionValue — create each dimension value
+   Payload: {"displayName": "Vestlandet", "dimensionIndex": 1, "active": true, "showInVoucherRegistration": true}
+   - dimensionIndex must match the dimension created in step 1
+3. POST /ledger/accountingDimensionValue — create additional values as needed
+4. POST /ledger/voucher?sendToLedger=true — create the journal entry
+   Payload: {
+     "date": "YYYY-MM-DD",
+     "description": "...",
+     "postings": [
+       {
+         "account": {"id": N},
+         "description": "...",
+         "amountGross": N,
+         "amountGrossCurrency": N,
+         "freeAccountingDimension1": {"id": <dimension_value_id>}
+       },
+       {
+         "account": {"id": N},
+         "amountGross": -N,
+         "amountGrossCurrency": -N
+       }
+     ]
+   }
+   - Use freeAccountingDimension1/2/3 matching the dimensionIndex
+   - amountGross and amountGrossCurrency must be equal for NOK
+   - Debits positive, credits negative
+   - Postings must balance (sum to zero)
+Mistakes:
+- Using account number instead of account ID (must GET /ledger/account?number=N to find ID)
+- Forgetting amountGrossCurrency (must equal amountGross for NOK)
+- Forgetting the balancing credit posting (postings must sum to zero)
+- Using wrong dimension field (freeAccountingDimension1 vs 2 vs 3 — must match dimensionIndex)
+- Some accounts (1920, 2400) are system-managed and cannot be used in manual vouchers
+
+## TASK: Enable Sales Module / Accounting Module
+Trigger: "aktiver modul", "enable module", "aktivere", "sales module"
+Checks: module activated
+Workflow:
+1. GET /company/salesmodules → check current modules
+2. POST /company/salesmodules with module to activate
+
+## TASK: Create Supplier / Vendor
+Trigger: "opprett leverandør", "create supplier", "crear proveedor", "Lieferant erstellen"
+Checks: supplier found, name, organizationNumber, isSupplier
+Workflow:
+1. POST /customer with: name, organizationNumber, isSupplier: true, isCustomer: false
+   - Suppliers use the same /customer endpoint but with isSupplier: true
 """
