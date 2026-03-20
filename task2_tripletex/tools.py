@@ -139,8 +139,8 @@ from task2_tripletex.api_docs_tool import lookup_api_docs
 # Planner gets read-only API access + docs lookup for research
 PLANNER_TOOLS = [tripletex_get, lookup_api_docs]
 
-# Executor gets write tools + GET as fallback for error recovery
-EXECUTOR_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
+# Executor gets write tools + GET and docs lookup for error recovery
+EXECUTOR_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete, lookup_api_docs]
 
 # Full toolset (if needed)
 ALL_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
