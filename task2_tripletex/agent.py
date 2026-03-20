@@ -12,7 +12,7 @@ from langgraph.prebuilt import create_react_agent
 from task2_tripletex.api_reference import API_REFERENCE
 from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.tools import (
-    ALL_TOOLS,
+    EXECUTOR_TOOLS,
     PLANNER_TOOLS,
     TripletexClient,
     set_client,
@@ -103,10 +103,10 @@ class TripletexAgent:
             tools=PLANNER_TOOLS,
             prompt=PLANNER_SYSTEM_PROMPT,
         )
-        # Executor: ReAct agent with write tools (POST, PUT, DELETE)
+        # Executor: ReAct agent with write tools only (POST, PUT, DELETE)
         self.executor = create_react_agent(
             model=self.executor_llm,
-            tools=ALL_TOOLS,
+            tools=EXECUTOR_TOOLS,
             prompt=EXECUTOR_SYSTEM_PROMPT,
         )
 

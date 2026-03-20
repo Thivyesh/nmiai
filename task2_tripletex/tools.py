@@ -137,5 +137,8 @@ def tripletex_delete(endpoint: str) -> str:
 # Planner gets read-only access for research
 PLANNER_TOOLS = [tripletex_get]
 
-# Executor gets all tools for execution
+# Executor gets write tools + GET as fallback for error recovery
+EXECUTOR_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
+
+# Full toolset (if needed)
 ALL_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
