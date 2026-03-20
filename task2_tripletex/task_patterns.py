@@ -48,21 +48,29 @@ Keywords: faktura, invoice, Rechnung, factura, facture, fatura
 ---
 
 ## EMPLOYEE TASKS
-Keywords: ansatt, employee, Mitarbeiter, empleado, employé, empregado
+Keywords: ansatt, employee, Mitarbeiter, empleado, employé, empregado, funcionário
 
 ### Prerequisites (MUST check)
 | Check | How | Why |
 |-------|-----|-----|
 | Department ID | GET /department?fields=id&count=1 | Employee POST FAILS without department |
 | Admin role? | Prompt says "kontoadministrator" / "admin" | Need entitlements endpoint after creation |
+| Start date? | Prompt mentions start date / "data de início" / "startdato" | Need separate POST /employee/employment |
 
 ### Verified Workflow
-1. POST /employee — {firstName, lastName, email, phoneNumberMobile, department: {"id": N}}
-2. PUT /employee/entitlement/:grantEntitlementsByTemplate?employeeId=N&template=ALL_PRIVILEGES (if admin)
+1. POST /employee — {firstName, lastName, email, phoneNumberMobile, dateOfBirth, department: {"id": N}}
+   - Do NOT include "employments" in the employee POST body — create employment separately
+   - If sandbox requires userType, use "NO_ACCESS" as default
+2. POST /employee/employment — {employee: {"id": N}, startDate: "YYYY-MM-DD", isMainEmployer: true}
+   - Only if the prompt mentions a start date / employment start
+   - This is a SEPARATE call, not embedded in the employee POST
+3. PUT /employee/entitlement/:grantEntitlementsByTemplate?employeeId=N&template=ALL_PRIVILEGES (if admin)
 
 ### Verified Field Gotchas
 - Phone: "phoneNumberMobile" NOT "phoneNumber" (that's for customers!)
-- userType is READ-ONLY — never set it, use entitlements endpoint
+- userType: if POST fails with "Brukertype kan ikke være 0", retry with userType: "NO_ACCESS"
+- Employment: create via separate POST /employee/employment, NOT as embedded array in employee POST
+- dateOfBirth: include if mentioned in prompt (format YYYY-MM-DD)
 - Entitlements: query params only, no body, path is exactly /employee/entitlement/:grantEntitlementsByTemplate
 - PUT /employee requires dateOfBirth even if not changing it
 
