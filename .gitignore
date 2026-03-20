@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 submission.zip
 openapi_cache.json
+search_index.npz
