@@ -1,4 +1,4 @@
-"""LangGraph-based Tripletex accounting agent with planner → executor architecture."""
+"""LangGraph-based Tripletex accounting agent with researcher → executor architecture."""
 
 import asyncio
 import base64
@@ -10,7 +10,6 @@ from anthropic import RateLimitError
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import ChatOllama
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langgraph.prebuilt import create_react_agent
 
@@ -24,104 +23,114 @@ from task2_tripletex.tools import (
 
 logger = logging.getLogger(__name__)
 
-# Total time budget: 4.5 minutes (leave 30s buffer before 5-min competition timeout)
-TOTAL_TIMEOUT = 270
-# Planner gets max 60 seconds — if it can't plan by then, it's over-researching
-PLANNER_TIMEOUT = 60
-# Executor gets the rest
-EXECUTOR_TIMEOUT = 180
+TOTAL_TIMEOUT = 270  # 4.5 min total budget
+RESEARCHER_TIMEOUT = 60
+EXECUTOR_TIMEOUT = 200
 
-PLANNER_SYSTEM_PROMPT = """\
-You are an expert accounting task planner for Tripletex, a Norwegian accounting system.
+RESEARCHER_SYSTEM_PROMPT = """\
+You are a research assistant for a Tripletex accounting agent. Your job is to investigate
+the task and provide everything the executor needs to succeed on the FIRST try.
 
 ## Your Tools
-1. **lookup_task_pattern(task_description)** — CALL FIRST. Returns the exact workflow.
-2. **tripletex_get(endpoint, params)** — Find real IDs (departments, payment types).
-3. **lookup_api_docs(search, semantic)** — Look up field names. Only if unsure.
-4. **search_tripletex_docs(query)** — Official FAQs. Only if stuck.
-5. **web_search(query)** — Last resort.
+1. **lookup_task_pattern(task_description)** — CALL FIRST. Returns the workflow, required fields, and common mistakes.
+2. **tripletex_get(endpoint, params)** — Read the live API to find real IDs and check prerequisites.
+3. **lookup_api_docs(search, semantic)** — Look up exact field names and schemas.
+4. **search_tripletex_docs(query)** — Official Tripletex FAQs and guides.
+5. **web_search(query)** — Last resort for unknown tasks.
 
-## SPEED RULES — Be fast and decisive.
-- Call lookup_task_pattern ONCE — it gives you the workflow and field names.
-- Only use tripletex_get for IDs you actually need (department, payment type, account).
-- The sandbox is FRESH — CREATE entities, don't search for existing ones.
-- Output the plan as soon as you have the IDs. Do NOT over-research.
-
-## CRITICAL RULES
-- Every entity mentioned in the prompt must be CREATED as a separate record.
-- Use EXACT values from the prompt. NEVER modify names, emails, amounts.
-- Only include fields from the prompt + fields the task pattern says are required.
-- Do NOT add optional fields (like account, vatType, currency) unless the prompt asks for them.
-- For voucher postings: use account {"id": N} and amountGross + amountGrossCurrency.
+## Your Workflow
+1. Call lookup_task_pattern to understand the task type and workflow.
+2. Identify the RISKS — what could cause the executor to fail:
+   - Does it need a department ID? → GET /department
+   - Does it involve invoices? → CHECK bank account: GET /ledger/account?number=1920&fields=id,version,bankAccountNumber
+   - Does it need payment type IDs? → GET /travelExpense/paymentType or /invoice/paymentType
+   - Does it reference existing entities? → GET them to find IDs
+   - Does it involve products? → Do NOT set vatType (only default works)
+   - Does it involve vouchers? → GET account IDs (never use account numbers)
+3. Verify each risk using tripletex_get.
+4. Output a RESEARCH BRIEF with your findings.
 
 ## Output Format
-TASK SUMMARY: <one line>
+TASK TYPE: <e.g., "Create Invoice with Payment", "Create Employee as Admin">
+TASK PATTERN: <key workflow steps from the pattern>
 
-CONTEXT:
-- <IDs found>
+FINDINGS:
+- Department ID: <N or "not needed">
+- Bank account: <set/not set, account ID if needed>
+- Payment type IDs: <if relevant>
+- Existing entities found: <IDs>
+- Prerequisites: <what needs to be created/set up first>
 
-STEPS:
-1. <METHOD> <endpoint>
-   Payload: {<exact JSON>}
+RISKS & WARNINGS:
+- <specific things the executor must watch out for>
+- <field name gotchas, required fields, etc.>
 
-NOTES:
-- <gotchas>
+RECOMMENDED WORKFLOW:
+1. <step with real IDs filled in>
+2. <step>
+...
+
+## Rules
+- Be FAST. Max 5 tool calls. Don't over-research.
+- Focus on RISKS — things that would cause 4xx errors.
+- The sandbox is FRESH — entities must be created, not searched for.
+- Use EXACT values from the prompt. NEVER modify names, emails, amounts.
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You are a Tripletex API executor. Follow the plan step by step.
+You are a Tripletex API executor. You receive the original task and a research brief
+with verified IDs, prerequisites, and warnings.
 
 ## Your Tools
 - **tripletex_post/put/delete** — Execute API calls
-- **tripletex_get** — Read API data (for error investigation)
-- **lookup_api_docs(search, semantic)** — Look up exact field names and schemas
-- **lookup_task_pattern(task_description)** — Look up accounting workflow guidance
-- **search_tripletex_docs(query)** — Search official Tripletex FAQs
-- **web_search(query)** — Last resort web search
+- **tripletex_get** — Read API data (for error recovery)
+- **lookup_api_docs(search, semantic)** — Look up exact field names
+- **lookup_task_pattern(task_description)** — Workflow guidance
+- **search_tripletex_docs(query)** — Official FAQs
+- **web_search(query)** — Last resort
 
-## Execution
-1. Follow the plan step by step, in order.
-2. Use the EXACT endpoint, method, and payload from each step.
-3. After POST/PUT, save the returned ID for subsequent steps.
-4. Use EXACT values from the plan and original task. NEVER modify names, emails, amounts.
+## How to Work
+1. Read the research brief — it has verified IDs, prerequisites, and warnings.
+2. Follow the RECOMMENDED WORKFLOW from the brief.
+3. Execute each step using the tools.
+4. Use EXACT values from the original task. NEVER modify names, emails, amounts.
 5. For query-param endpoints (entitlements, payment, credit note), put params in the URL, pass body="{}".
-6. If a step references an endpoint you're not sure exists, SKIP it rather than guessing.
 
 ## Error Recovery (max 1 retry per step)
-When a step fails:
 1. Read the error message.
-2. Call **lookup_api_docs** for the correct schema.
+2. Call lookup_api_docs for the correct schema.
 3. Fix the specific issue and retry ONCE.
-4. If retry fails, SKIP and move to the next step. Do NOT spiral.
+4. If retry fails, SKIP and continue.
 
-## Common Error Fixes
-- "Request mapping failed" → wrong field names. Look up schema.
-- "Feltet må fylles ut" → missing required field.
-- "Object not found" / 404 → wrong ID or URL format.
-- "Kunde mangler" → posting needs customer ID.
-- Account references: ALWAYS {"id": N}, never {"number": N}.
-- Voucher amounts: amountGross + amountGrossCurrency, NEVER "amount".
+## Common Pitfalls (from the research brief warnings)
+- Employee phone: "phoneNumberMobile" (NOT "phoneNumber")
+- Order lines: "count" (NOT "quantity")
+- Travel costs: "amountCurrencyIncVat" (NOT "amount"), "category" (NOT "description")
+- Products: do NOT set vatType (only default id=6 works)
+- Voucher accounts: ALWAYS {"id": N}, never {"number": N}
+- Voucher amounts: amountGross + amountGrossCurrency, NEVER "amount"
+- Invoice requires bank account on ledger account 1920
 
 ## Efficiency
-- Every 4xx error hurts the score. Be precise.
+- Every 4xx error hurts the score.
 - Do NOT add extra verification GET calls.
-- Stop after completing all planned steps.
+- Stop after completing all steps.
 """
 
 
 class TripletexAgent:
-    """Orchestrates the planner → executor pipeline for solving Tripletex tasks."""
+    """Orchestrates the researcher → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
-        # Planner: Haiku (fast, Tier 2: 1000 RPM)
-        self.planner_llm = ChatAnthropic(
+        # Researcher: Haiku (fast, focused on finding risks and IDs)
+        self.researcher_llm = ChatAnthropic(
             model="claude-haiku-4-5-20251001",
             max_tokens=4096,
             temperature=0,
             max_retries=2,
             timeout=30.0,
         )
-        # Executor: Sonnet (precise tool calling, Tier 2: 1000 RPM)
+        # Executor: Sonnet (smart, plans and executes with full context)
         self.executor_llm = ChatAnthropic(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -129,7 +138,7 @@ class TripletexAgent:
             max_retries=2,
             timeout=60.0,
         )
-        # Fallback: Gemini Flash (if Anthropic is down)
+        # Fallback: Gemini Flash
         self.fallback_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             temperature=0,
@@ -137,20 +146,20 @@ class TripletexAgent:
             timeout=60,
         )
 
-        self.planner = create_react_agent(
-            model=self.planner_llm,
+        self.researcher = create_react_agent(
+            model=self.researcher_llm,
             tools=PLANNER_TOOLS,
-            prompt=PLANNER_SYSTEM_PROMPT,
+            prompt=RESEARCHER_SYSTEM_PROMPT,
         )
         self.executor = create_react_agent(
             model=self.executor_llm,
             tools=EXECUTOR_TOOLS,
             prompt=EXECUTOR_SYSTEM_PROMPT,
         )
-        self.fallback_planner = create_react_agent(
+        self.fallback_researcher = create_react_agent(
             model=self.fallback_llm,
             tools=PLANNER_TOOLS,
-            prompt=PLANNER_SYSTEM_PROMPT,
+            prompt=RESEARCHER_SYSTEM_PROMPT,
         )
         self.fallback_executor = create_react_agent(
             model=self.fallback_llm,
@@ -170,10 +179,7 @@ class TripletexAgent:
                         "url": f"data:{f.mime_type};base64,{f.content_base64}",
                     },
                 })
-                parts.append({
-                    "type": "text",
-                    "text": f"[Above image: {f.filename}]",
-                })
+                parts.append({"type": "text", "text": f"[Above image: {f.filename}]"})
             elif f.mime_type == "application/pdf":
                 parts.append({
                     "type": "text",
@@ -182,10 +188,7 @@ class TripletexAgent:
             else:
                 try:
                     text = raw.decode("utf-8")
-                    parts.append({
-                        "type": "text",
-                        "text": f"### {f.filename}\n```\n{text[:8000]}\n```",
-                    })
+                    parts.append({"type": "text", "text": f"### {f.filename}\n```\n{text[:8000]}\n```"})
                 except UnicodeDecodeError:
                     parts.append({
                         "type": "text",
@@ -194,52 +197,49 @@ class TripletexAgent:
         return parts
 
     async def _run_with_fallback(self, primary, fallback, messages, config):
-        """Run primary agent, fall back to Ollama on rate limit or server error."""
+        """Run primary agent, fall back to Gemini on rate limit or server error."""
         try:
             return await primary.ainvoke(messages, config=config)
         except Exception as e:
             err = f"{type(e).__name__}: {e}".lower()
-            retriable_keywords = ["429", "rate", "503", "unavailable", "high demand", "overloaded", "servererror"]
-            if any(k in err for k in retriable_keywords):
-                logger.warning("Primary model unavailable, falling back to Ollama: %s", type(e).__name__)
+            if any(k in err for k in ["429", "rate", "503", "unavailable", "high demand", "overloaded", "servererror"]):
+                logger.warning("Primary model unavailable (%s), falling back", type(e).__name__)
                 try:
                     return await fallback.ainvoke(messages, config=config)
                 except Exception as e2:
                     logger.warning("Fallback also failed: %s", e2)
-                    raise e  # Re-raise original
+                    raise e
             raise
 
-    async def _plan(self, request: SolveRequest, config: dict) -> str:
-        """Use the planner agent to research the API and create an execution plan."""
+    async def _research(self, request: SolveRequest, config: dict) -> str:
+        """Use the researcher to investigate the task and gather context."""
         content_parts = [{"type": "text", "text": f"## Task Prompt\n\n{request.prompt}"}]
-
         if request.files:
             content_parts.append({"type": "text", "text": "\n## Attached Files\n"})
             content_parts.extend(self._extract_file_content(request))
 
         messages = {"messages": [HumanMessage(content=content_parts)]}
-        planner_config = {**config, "recursion_limit": 15}
+        research_config = {**config, "recursion_limit": 15}
 
         result = await asyncio.wait_for(
             self._run_with_fallback(
-                self.planner, self.fallback_planner, messages, planner_config
+                self.researcher, self.fallback_researcher, messages, research_config
             ),
-            timeout=PLANNER_TIMEOUT,
+            timeout=RESEARCHER_TIMEOUT,
         )
 
         last_message = result["messages"][-1]
-        plan = last_message.content
-        # Gemini returns content as list of dicts; extract text
-        if isinstance(plan, list):
-            plan = "\n".join(
+        brief = last_message.content
+        if isinstance(brief, list):
+            brief = "\n".join(
                 part.get("text", str(part)) if isinstance(part, dict) else str(part)
-                for part in plan
+                for part in brief
             )
-        logger.info("Plan:\n%s", plan)
-        return plan
+        logger.info("Research brief:\n%s", brief)
+        return brief
 
     async def solve(self, request: SolveRequest) -> SolveResponse:
-        """Run the planner → executor pipeline to solve a Tripletex task."""
+        """Run the researcher → executor pipeline."""
         start_time = time.time()
 
         client = TripletexClient(
@@ -253,28 +253,28 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Step 1: Plan (with timeout)
+        # Step 1: Research
         try:
-            plan = await self._plan(request, config)
+            brief = await self._research(request, config)
         except asyncio.TimeoutError:
-            logger.warning("Planner timed out after %ds", PLANNER_TIMEOUT)
-            return SolveResponse(status="completed")
+            logger.warning("Researcher timed out after %ds", RESEARCHER_TIMEOUT)
+            brief = "Research timed out. Execute based on the task prompt alone."
         except Exception as e:
-            logger.exception("Planner failed: %s", e)
-            return SolveResponse(status="completed")
+            logger.exception("Researcher failed: %s", e)
+            brief = f"Research failed: {e}. Execute based on the task prompt alone."
 
         # Check remaining time
         elapsed = time.time() - start_time
         remaining = TOTAL_TIMEOUT - elapsed
         if remaining < 30:
-            logger.warning("Only %ds left after planning — skipping execution", remaining)
+            logger.warning("Only %ds left after research — skipping execution", remaining)
             return SolveResponse(status="completed")
 
-        # Step 2: Execute (with timeout based on remaining time)
-        executor_timeout = min(EXECUTOR_TIMEOUT, remaining - 10)  # 10s buffer
+        # Step 2: Execute
+        executor_timeout = min(EXECUTOR_TIMEOUT, remaining - 10)
         executor_config = {**config, "recursion_limit": 40}
         executor_message = HumanMessage(
-            content=f"## Original Task\n{request.prompt}\n\n## Execution Plan\n{plan}"
+            content=f"## Original Task\n{request.prompt}\n\n## Research Brief\n{brief}"
         )
 
         try:
