@@ -113,9 +113,9 @@ class TripletexAgent:
     """Orchestrates the planner → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
-        # Planner: Gemini Pro (strong reasoning, 300 RPM)
+        # Planner: Gemini Flash (fast, less demand pressure)
         self.planner_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro",
+            model="gemini-2.5-flash",
             temperature=0,
             max_retries=2,
             timeout=60,
@@ -191,15 +191,13 @@ class TripletexAgent:
         return parts
 
     async def _run_with_fallback(self, primary, fallback, messages, config):
-        """Run primary agent, fall back to Ollama on rate limit."""
+        """Run primary agent, fall back to Ollama on rate limit or server error."""
         try:
             return await primary.ainvoke(messages, config=config)
-        except RateLimitError as e:
-            logger.warning("Rate-limited, falling back to Ollama: %s", e)
-            return await fallback.ainvoke(messages, config=config)
         except Exception as e:
-            if "429" in str(e) or "rate" in str(e).lower():
-                logger.warning("Rate-limited (generic), falling back to Ollama: %s", e)
+            err = str(e).lower()
+            if any(k in err for k in ["429", "rate", "503", "unavailable", "high demand", "overloaded"]):
+                logger.warning("Primary model unavailable, falling back to Ollama: %s", e)
                 return await fallback.ainvoke(messages, config=config)
             raise
 
