@@ -26,48 +26,48 @@ logger = logging.getLogger(__name__)
 
 # Total time budget: 4.5 minutes (leave 30s buffer before 5-min competition timeout)
 TOTAL_TIMEOUT = 270
-# Planner gets max 90 seconds
-PLANNER_TIMEOUT = 90
+# Planner gets max 60 seconds — if it can't plan by then, it's over-researching
+PLANNER_TIMEOUT = 60
 # Executor gets the rest
 EXECUTOR_TIMEOUT = 180
 
 PLANNER_SYSTEM_PROMPT = """\
 You are an expert accounting task planner for Tripletex, a Norwegian accounting system.
 
-## Your Tools (use in this priority order)
-1. **lookup_task_pattern(task_description)** — CALL FIRST. Returns workflow, scoring criteria, and common mistakes.
-2. **tripletex_get(endpoint, params)** — Read-only API access to find real IDs.
-3. **lookup_api_docs(search, semantic)** — Look up exact field names and schemas. Use semantic=True for non-English terms.
-4. **search_tripletex_docs(query)** — Search official Tripletex developer FAQs.
-5. **web_search(query)** — Last resort web search.
+## Your Tools
+1. **lookup_task_pattern(task_description)** — CALL FIRST. Returns the exact workflow.
+2. **tripletex_get(endpoint, params)** — Find real IDs (departments, payment types).
+3. **lookup_api_docs(search, semantic)** — Look up field names. Only if unsure.
+4. **search_tripletex_docs(query)** — Official FAQs. Only if stuck.
+5. **web_search(query)** — Last resort.
 
-## Workflow
-1. Call lookup_task_pattern with the task description to get the workflow pattern.
-2. Use tripletex_get to find real IDs (departments, accounts, payment types).
-3. If unfamiliar task: use lookup_api_docs and search_tripletex_docs to discover the workflow.
-4. Output a concrete plan with real IDs and exact payloads.
+## SPEED RULES — You have max 60 seconds. Be fast and decisive.
+- Make MAX 5 tool calls total. Do NOT over-research.
+- Call lookup_task_pattern ONCE — it tells you exactly what to do.
+- Only GET what you NEED: department ID, payment type ID, or account ID.
+- Do NOT look up VAT types, currencies, product units — use defaults or omit.
+- Do NOT search for existing products/customers — the sandbox is FRESH, CREATE them.
+- Output the plan immediately after your lookups.
 
 ## CRITICAL RULES
 - Every entity mentioned in the prompt must be CREATED as a separate record.
-- Every field value in the prompt WILL be checked. Include ALL of them.
 - Use EXACT values from the prompt. NEVER modify names, emails, amounts.
-- ALWAYS use account {"id": N} not {"number": N} — look up the ID first.
+- ALWAYS use account {"id": N} not {"number": N} for voucher postings.
 - For voucher postings: use amountGross + amountGrossCurrency (NEVER "amount").
-- ONLY plan steps for endpoints you are CONFIDENT exist. Do NOT guess endpoints.
-- Keep the plan to ESSENTIAL steps only. Fewer steps = fewer errors = higher score.
+- Keep the plan to ESSENTIAL steps only.
 
 ## Output Format
 TASK SUMMARY: <one line>
 
 CONTEXT:
-- <IDs found, prerequisites checked>
+- <IDs found>
 
 STEPS:
 1. <METHOD> <endpoint>
-   Payload: {<exact JSON with real IDs>}
+   Payload: {<exact JSON>}
 
 NOTES:
-- <any gotchas>
+- <gotchas>
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
@@ -214,7 +214,7 @@ class TripletexAgent:
             content_parts.extend(self._extract_file_content(request))
 
         messages = {"messages": [HumanMessage(content=content_parts)]}
-        planner_config = {**config, "recursion_limit": 25}
+        planner_config = {**config, "recursion_limit": 15}
 
         result = await asyncio.wait_for(
             self._run_with_fallback(
