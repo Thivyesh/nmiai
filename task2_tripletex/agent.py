@@ -54,29 +54,32 @@ STEPS:
 - STOP after outputting payloads. Do not do extra research.
 """
 
-EXECUTOR_SYSTEM_PROMPT = """\
-You execute Tripletex tasks. The research brief has payloads — use them.
+AGENT_SYSTEM_PROMPT = """\
+You solve Tripletex accounting tasks. You have reference data and tools to help.
+
+## STRICT PROCESS
+1. Call get_task_workflow (English description) → understand the steps
+2. Call get_payload_template for each endpoint → get exact JSON to copy
+3. Use tripletex_get ONLY for IDs not in the pre-fetched data
+4. If task says entities EXIST ("has invoice", "outstanding"): search for them with tripletex_get
+5. Fill in templates with real IDs + prompt values → execute with tripletex_post/put/delete
+6. After each POST, save returned ID for next steps
+7. For payment: READ "amount" from invoice response. Do NOT calculate.
 
 ## Tools
+- **get_task_workflow** — Workflow steps for the task type
+- **get_payload_template** — EXACT JSON template for an endpoint. Copy it, don't invent fields.
+- **tripletex_get** — Read API data (find entities, get IDs)
 - **tripletex_post/put/delete** — Execute API calls
-- **tripletex_get** — Read data (returned IDs, invoice amounts)
-- **get_payload_template** — Get the EXACT JSON for an endpoint. Use if brief is unclear or step fails.
-- **lookup_api_docs** — Full schema lookup. Use if no template exists for the endpoint.
+- **lookup_api_docs** — Full schema for endpoints not in templates
 
-## How to Work
-1. Follow the steps in the research brief.
-2. If the brief has a complete payload → use it exactly.
-3. If the brief is unclear or missing a step → call get_payload_template for that endpoint, fill in values.
-4. After each POST, save the returned ID for subsequent steps.
-5. Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
-6. For payment: READ the "amount" from the invoice response. Do NOT calculate.
+## Rules
+- Copy JSON from templates. Do NOT construct from memory.
+- EXACT values from the prompt. Never modify names, emails, amounts.
+- Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
 
 ## Error Recovery
-If a step fails:
-1. Call get_payload_template for that endpoint — compare your payload with the template.
-2. Fix the mismatched fields and retry ONCE.
-3. If no template: call lookup_api_docs for the schema.
-4. If retry fails, skip and continue.
+If a step fails: get_payload_template → compare → fix → retry ONCE → skip if still failing.
 """
 
 
@@ -87,14 +90,8 @@ class TripletexAgent:
     _lock = asyncio.Lock()
 
     def __init__(self):
-        self.researcher_llm = ChatAnthropic(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            temperature=0,
-            max_retries=2,
-            timeout=30.0,
-        )
-        self.executor_llm = ChatAnthropic(
+        # Single agent: Opus does everything
+        self.agent_llm = ChatAnthropic(
             model="claude-opus-4-20250514",
             max_tokens=4096,
             temperature=0,
@@ -108,25 +105,17 @@ class TripletexAgent:
             timeout=60,
         )
 
-        self.researcher = create_react_agent(
-            model=self.researcher_llm,
-            tools=PLANNER_TOOLS,
-            prompt=RESEARCHER_SYSTEM_PROMPT,
+        # All tools available to the single agent
+        all_tools = list(set(PLANNER_TOOLS + EXECUTOR_TOOLS))
+        self.agent = create_react_agent(
+            model=self.agent_llm,
+            tools=all_tools,
+            prompt=AGENT_SYSTEM_PROMPT,
         )
-        self.executor = create_react_agent(
-            model=self.executor_llm,
-            tools=EXECUTOR_TOOLS,
-            prompt=EXECUTOR_SYSTEM_PROMPT,
-        )
-        self.fallback_researcher = create_react_agent(
+        self.fallback_agent = create_react_agent(
             model=self.fallback_llm,
-            tools=PLANNER_TOOLS,
-            prompt=RESEARCHER_SYSTEM_PROMPT,
-        )
-        self.fallback_executor = create_react_agent(
-            model=self.fallback_llm,
-            tools=EXECUTOR_TOOLS,
-            prompt=EXECUTOR_SYSTEM_PROMPT,
+            tools=all_tools,
+            prompt=AGENT_SYSTEM_PROMPT,
         )
 
     def _extract_file_content(self, request: SolveRequest) -> list:
@@ -287,7 +276,7 @@ class TripletexAgent:
             return await self._solve_inner(request)
 
     async def _solve_inner(self, request: SolveRequest) -> SolveResponse:
-        """Inner solve method, runs under lock."""
+        """Single-agent solve: Opus gets pre-fetched data + all tools."""
         start_time = time.time()
 
         client = TripletexClient(
@@ -301,48 +290,37 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Pre-fetch reference data (always available, even if researcher fails)
+        # Pre-fetch reference data
         ref_data = self._prefetch_reference_data()
+        logger.info("Pre-fetched reference data:\n%s", ref_data)
 
-        # Step 1: Research
-        try:
-            brief = await self._research(request, config)
-        except asyncio.TimeoutError:
-            logger.warning("Researcher timed out after %ds", RESEARCHER_TIMEOUT)
-            brief = f"Research timed out. This may be a complex/unknown task. Use your tools (get_task_workflow, get_payload_template, tripletex_get) to explore and figure it out.\n\n{ref_data}"
-        except Exception as e:
-            logger.exception("Researcher failed: %s", e)
-            brief = f"Research failed. This may be a complex/unknown task. Use your tools (get_task_workflow, get_payload_template, tripletex_get) to explore and figure it out.\n\n{ref_data}"
+        # Build message with task + pre-fetched data + files
+        content_parts = [
+            {"type": "text", "text": f"## Task\n\n{request.prompt}"},
+            {"type": "text", "text": f"\n{ref_data}"},
+        ]
+        if request.files:
+            content_parts.append({"type": "text", "text": "\n## Attached Files\n"})
+            content_parts.extend(self._extract_file_content(request))
 
-        # Check remaining time
-        elapsed = time.time() - start_time
-        remaining = TOTAL_TIMEOUT - elapsed
-        if remaining < 30:
-            logger.warning("Only %ds left after research — skipping execution", remaining)
-            return SolveResponse(status="completed")
-
-        # Step 2: Execute
-        executor_timeout = min(EXECUTOR_TIMEOUT, remaining - 10)
-        executor_config = {**config, "recursion_limit": 40}
-        executor_message = HumanMessage(
-            content=f"## Original Task\n{request.prompt}\n\n## Research Brief\n{brief}"
-        )
+        agent_config = {**config, "recursion_limit": 40}
+        message = HumanMessage(content=content_parts)
 
         try:
             await asyncio.wait_for(
                 self._run_with_fallback(
-                    self.executor, self.fallback_executor,
-                    {"messages": [executor_message]}, executor_config
+                    self.agent, self.fallback_agent,
+                    {"messages": [message]}, agent_config
                 ),
-                timeout=executor_timeout,
+                timeout=TOTAL_TIMEOUT - 10,
             )
         except asyncio.TimeoutError:
-            logger.warning("Executor timed out after %ds — returning partial results", executor_timeout)
+            logger.warning("Agent timed out — returning partial results")
         except Exception as e:
             if "recursion" in str(e).lower():
-                logger.warning("Executor hit recursion limit — returning partial results")
+                logger.warning("Agent hit recursion limit — returning partial results")
             else:
-                logger.exception("Executor error — returning completed for partial scoring")
+                logger.exception("Agent error — returning completed for partial scoring")
 
         total_time = time.time() - start_time
         logger.info("Task completed in %.1fs", total_time)
