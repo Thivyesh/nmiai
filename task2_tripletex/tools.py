@@ -136,12 +136,13 @@ def tripletex_delete(endpoint: str) -> str:
 
 from task2_tripletex.api_docs_tool import lookup_api_docs
 from task2_tripletex.devdocs_tool import search_tripletex_docs
+from task2_tripletex.experience_tool import search_past_experience
 from task2_tripletex.task_patterns_tool import lookup_task_pattern
 from task2_tripletex.web_search_tool import web_search
 from task2_tripletex.workflow_tools import get_payload_template, get_task_workflow
 
 # Researcher: workflow + payload templates + API reference
-PLANNER_TOOLS = [get_task_workflow, get_payload_template, tripletex_get, lookup_api_docs, search_tripletex_docs, web_search]
+PLANNER_TOOLS = [get_task_workflow, get_payload_template, tripletex_get, lookup_api_docs, search_tripletex_docs, web_search, search_past_experience]
 
 # Executor: write tools + templates for self-correction
-EXECUTOR_TOOLS = [tripletex_post, tripletex_put, tripletex_delete, tripletex_get, get_payload_template, lookup_api_docs, get_task_workflow]
+EXECUTOR_TOOLS = [tripletex_post, tripletex_put, tripletex_delete, tripletex_get, get_payload_template, lookup_api_docs, get_task_workflow, search_past_experience]

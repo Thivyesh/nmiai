@@ -5,6 +5,8 @@ description = "NM i AI Competition - Object Detection & Tripletex Agent"
 requires-python = ">=3.12"
 dependencies = [
     "duckduckgo-search>=8.1.1",
+    "easyocr>=1.7.2",
+    "elasticsearch>=8.0,<9.0",
     "fastapi>=0.135.1",
     "httpx>=0.28.1",
     "huggingface-hub>=1.7.2",
@@ -26,6 +28,7 @@ dependencies = [
     "supervision>=0.27.0.post2",
     "tensorboard>=2.20.0",
     "tensorboard-plugin-profile>=2.22.0",
+    "timm==0.9.12",
     "ultralytics==8.1.0",
     "uvicorn>=0.42.0",
 ]
