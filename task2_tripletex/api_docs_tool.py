@@ -65,6 +65,19 @@ def _resolve_ref(ref: str, spec: dict) -> dict:
     return spec.get("components", {}).get("schemas", {}).get(name, {})
 
 
+
+# Well-known entity types — just reference by {"id": N}, don't expand fields
+_REFERENCE_ONLY_SCHEMAS = {
+    "Customer", "Employee", "Department", "Project", "Product",
+    "Currency", "VatType", "Account", "Contact", "Supplier",
+    "Company", "Division", "Municipality", "Country",
+    "CustomerCategory", "DiscountGroup", "ProductUnit",
+    "Voucher", "Invoice", "Order", "Document",
+    "TravelExpense", "TravelPaymentType", "TravelCostCategory",
+    "OccupationCode", "Asset",
+}
+
+
 def _get_schema_fields(schema: dict, spec: dict, depth: int = 0) -> list[str]:
     if depth > 2:
         return []
@@ -82,22 +95,28 @@ def _get_schema_fields(schema: dict, spec: dict, depth: int = 0) -> list[str]:
         enum = prop.get("enum", [])
         if ref:
             ref_name = ref.split("/")[-1]
-            typ = f"object({ref_name})"
-            # Always resolve sub-schemas at depth 0 to show their fields
-            if depth == 0:
-                sub_schema = _resolve_ref(ref, spec)
-                sub_fields = _get_schema_fields(sub_schema, spec, depth + 1)
-                if sub_fields:
-                    typ += "\n" + "\n".join(f"    {sf}" for sf in sub_fields)
+            if ref_name in _REFERENCE_ONLY_SCHEMAS:
+                # Well-known entity — just reference by ID
+                typ = f"object({ref_name}) — use {{\"id\": N}}"
+            else:
+                # Unfamiliar schema — expand fields so executor can see them
+                typ = f"object({ref_name})"
+                if depth == 0:
+                    sub_schema = _resolve_ref(ref, spec)
+                    sub_fields = _get_schema_fields(sub_schema, spec, depth + 1)
+                    if sub_fields:
+                        typ += "\n" + "\n".join(f"    {sf}" for sf in sub_fields)
         if prop.get("items", {}).get("$ref"):
             item_name = prop["items"]["$ref"].split("/")[-1]
-            typ = f"array[{item_name}]"
-            # Resolve array item schema at depth 0
-            if depth == 0:
-                item_schema = _resolve_ref(prop["items"]["$ref"], spec)
-                item_fields = _get_schema_fields(item_schema, spec, depth + 1)
-                if item_fields:
-                    typ += "\n" + "\n".join(f"    {sf}" for sf in item_fields)
+            if item_name in _REFERENCE_ONLY_SCHEMAS:
+                typ = f"array[{item_name}] — use [{{\"id\": N}}]"
+            else:
+                typ = f"array[{item_name}]"
+                if depth == 0:
+                    item_schema = _resolve_ref(prop["items"]["$ref"], spec)
+                    item_fields = _get_schema_fields(item_schema, spec, depth + 1)
+                    if item_fields:
+                        typ += "\n" + "\n".join(f"    {sf}" for sf in item_fields)
         req = " *REQUIRED*" if name in required else ""
         enum_str = f" enum={enum}" if enum else ""
         fields.append(f"  {name}: {typ}{req}{enum_str} — {desc}")
