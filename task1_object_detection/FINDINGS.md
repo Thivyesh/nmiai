@@ -114,3 +114,76 @@ Common traits: visually distinctive packaging, consistent shape, unique color/br
    - Stage 1: Generic product detection (high recall, ignore category)
    - Stage 2: Product classification using reference images
    - This separates the detection problem (easy) from classification (hard)
+
+---
+
+## 2026-03-21: Two-Stage Pipeline & Classification Experiments
+
+### Detection Results (1-class and 9-class)
+
+| Model | mAP@0.5 | Precision | Recall | Score Ceiling |
+|---|---|---|---|---|
+| **1-class detector** (yolov8m, 50ep) | **0.934** | 0.899 | 0.907 | 0.654 (70%) |
+| **9-class superclass** (yolov8m, 50ep) | **0.828** | 0.790 | 0.793 | — |
+| 356-class baseline (yolov8s, 30ep) | 0.038 | 0.187 | 0.057 | — |
+
+Detection is solved — 1-class detector at 93.4% mAP. The 9-class superclass detector also works well, grouping products into: knekkebroed, coffee, tea, cereal, eggs, spread, cookies, chocolate, other.
+
+### Classification Experiments
+
+| Approach | Top-1 Accuracy | Notes |
+|---|---|---|
+| YOLO-cls (343 classes) | <1% | Massive overfit |
+| YOLO-cls per group | <9% | Still overfits |
+| **YOLO backbone + LogReg (global)** | **33%** | Frozen backbone features, no overfit |
+| **YOLO backbone + LogReg (per group)** | **47.3%** | +14pp from grouping |
+| **YOLO backbone + OCR + LogReg (per group)** | **55-67%** | OCR boosts hardest groups |
+| CLIP zero-shot (confusable subset) | 69.5% | Benchmark, not sandbox-compatible |
+| CLIP + OCR (confusable subset) | 75.2% | Best result, needs ONNX for sandbox |
+| timm EfficientNet classifier | 0.4% | Complete overfit |
+
+### OCR Comparison
+
+| OCR Model | Avg Word Match |
+|---|---|
+| EasyOCR | 25% |
+| TrOCR | 10% |
+
+### Key Finding: OCR + Backbone Features Combined
+
+OCR word-match features boost classification significantly when added to YOLO backbone features:
+
+| Group | Backbone Only | + OCR | Boost | Top-5 |
+|---|---|---|---|---|
+| chocolate (13 cls) | 80% | **83%** | +3pp | 99% |
+| knekkebroed (55 cls) | 57% | **67%** | +10pp | 90% |
+| coffee (66 cls) | 50% | **55%** | +5pp | 89% |
+| tea (34 cls) | 53% | **57%** | +4pp | 92% |
+
+The biggest boost is on knekkebroed (+10pp) — exactly where products are most visually similar and text is the main differentiator.
+
+### Planned Pipeline
+
+```
+Shelf Image
+  → 9-class YOLO detector → product boxes + super-category
+  → Crop each box
+  → Per-group classification:
+    1. YOLO backbone features (576d)
+    2. OCR word-match scores
+    3. LogReg soft labels → guide YOLO-cls training (knowledge distillation)
+    4. Ensemble: YOLO-cls P1 + LogReg+OCR P2 → final category_id
+```
+
+### Sandbox Compatibility
+
+| Component | In Sandbox? | Solution |
+|---|---|---|
+| YOLO detector | Yes (ultralytics) | .pt weights |
+| YOLO backbone features | Yes (ultralytics) | Same model |
+| sklearn LogReg | Yes (scikit-learn) | .joblib file |
+| OCR (EasyOCR) | No | Need ONNX export or skip |
+| CLIP | No | Need ONNX export or skip |
+
+Without OCR/CLIP: estimated score ≈ 0.77 (detection 0.654 + classification 0.47 × 0.934 × 0.3)
+With OCR boost: estimated score ≈ 0.83
