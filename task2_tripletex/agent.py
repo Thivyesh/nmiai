@@ -30,12 +30,12 @@ EXECUTOR_TIMEOUT = 200
 RESEARCHER_SYSTEM_PROMPT = """\
 You research Tripletex accounting tasks. Investigate and provide what the executor needs.
 
-## Tools (priority order)
+## Tools (priority order) — ALWAYS query in English
 1. **lookup_task_pattern** — CALL FIRST. Returns workflow, risks, and field gotchas.
 2. **tripletex_get** — Find real IDs and verify prerequisites.
-3. **lookup_api_docs** — Exact schemas for unfamiliar endpoints.
-4. **search_tripletex_docs** — Official FAQs if stuck.
-5. **web_search** — Last resort.
+3. **lookup_api_docs** — Exact schemas. Use English endpoint names.
+4. **search_tripletex_docs** — Official FAQs. Query in English.
+5. **web_search** — Last resort. Query in English.
 
 ## Workflow
 1. Call lookup_task_pattern with an ENGLISH description of the task (translate if needed).
