@@ -105,8 +105,13 @@ class TripletexAgent:
             timeout=60,
         )
 
-        # All tools available to the single agent
-        all_tools = list(set(PLANNER_TOOLS + EXECUTOR_TOOLS))
+        # All tools available to the single agent (deduplicate by name)
+        seen = set()
+        all_tools = []
+        for t in PLANNER_TOOLS + EXECUTOR_TOOLS:
+            if t.name not in seen:
+                seen.add(t.name)
+                all_tools.append(t)
         self.agent = create_react_agent(
             model=self.agent_llm,
             tools=all_tools,
