@@ -25,9 +25,16 @@ PAYLOAD_TEMPLATES = {
             "email": "<EMAIL>",
             "phoneNumberMobile": "<PHONE>",
             "dateOfBirth": "<YYYY-MM-DD>",
+            "nationalIdentityNumber": "<NATIONAL_ID>",
+            "bankAccountNumber": "<BANK_ACCOUNT>",
             "department": {"id": "<DEPARTMENT_ID>"},
+            "address": {
+                "addressLine1": "<STREET>",
+                "postalCode": "<POSTAL_CODE>",
+                "city": "<CITY>",
+            },
         },
-        "notes": "phoneNumberMobile (NOT phoneNumber). department is REQUIRED. dateOfBirth if mentioned. Do NOT set userType unless POST fails with 'Brukertype' error — then retry with userType: 'STANDARD'.",
+        "notes": "phoneNumberMobile (NOT phoneNumber). department is REQUIRED. Include ALL fields from the prompt/PDF: dateOfBirth, nationalIdentityNumber, bankAccountNumber, address. Omit fields not mentioned. Do NOT set userType unless POST fails with 'Brukertype' error — then retry with userType: 'STANDARD'.",
     },
     "POST /employee/employment": {
         "description": "Create employment record for employee",
@@ -35,8 +42,20 @@ PAYLOAD_TEMPLATES = {
             "employee": {"id": "<EMPLOYEE_ID>"},
             "startDate": "<YYYY-MM-DD>",
             "isMainEmployer": True,
+            "employmentDetails": [
+                {
+                    "date": "<START_DATE>",
+                    "employmentType": "<ORDINARY|MARITIME|FREELANCE|PENSION>",
+                    "employmentForm": "<PERMANENT|TEMPORARY>",
+                    "remunerationType": "<MONTHLY_WAGE|HOURLY_WAGE|COMMISSION_PERCENTAGE|FEE>",
+                    "workingHoursScheme": "<NOT_SHIFT|ROUND_THE_CLOCK|SHIFT_365|OFFSHORE_336|CONTINUOUS|OTHER_SHIFT>",
+                    "percentageOfFullTimeEquivalent": 100.0,
+                    "annualSalary": "<ANNUAL_SALARY>",
+                    "occupationCode": {"id": "<OCCUPATION_CODE_ID>"},
+                }
+            ],
         },
-        "notes": "Separate call from employee creation. For salary tasks, must include division: {'id': N}.",
+        "notes": "Include employmentDetails with salary and occupation info if available from PDF/prompt. For salary tasks, must include division: {'id': N}. Look up occupationCode via GET /employee/employment/occupationCode.",
     },
     "PUT /employee/entitlement/:grantEntitlementsByTemplate": {
         "description": "Grant admin role to employee",

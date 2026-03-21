@@ -78,6 +78,14 @@ You solve Tripletex accounting tasks. You have reference data and tools to help.
 - EXACT values from the prompt. Never modify names, emails, amounts.
 - Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
 
+## File Attachments (PDF/images)
+If the task includes files, extract EVERY piece of data from them:
+- Names, dates, addresses, phone numbers, email, national ID, bank account
+- Salary/wage amounts, employment percentage, occupation codes
+- Product names, prices, quantities, invoice numbers
+- Include ALL extracted data in the API calls — every field will be checked.
+Include employee address: {addressLine1, postalCode, city}
+
 ## Error Recovery
 If a step fails: get_payload_template → compare → fix → retry ONCE → skip if still failing.
 """
