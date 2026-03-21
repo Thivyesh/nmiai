@@ -39,14 +39,22 @@ Keywords: faktura, invoice, Rechnung, factura, facture, fatura
 1. PUT /ledger/account/{id} — set bank account (if empty)
 2. POST /customer — with organizationNumber if given
 3. POST /product — for each product (name, number, priceExcludingVatCurrency only)
-4. POST /order — with customer, orderDate, deliveryDate (REQUIRED), orderLines with product refs
+   - ONLY set "number" if the prompt gives a specific product number
+   - If no product number in prompt, OMIT the number field entirely
+4. POST /order — with customer, orderDate, deliveryDate (REQUIRED), orderLines with product: {"id": N}
+   - ALWAYS include product reference in order lines when products were created
 5. POST /invoice — with invoiceDate, invoiceDueDate, customer, orders: [{"id": N}]
-6. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N (query params, no body)
+6. For payment: READ the "amount" field from the POST /invoice response
+   PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=<amount_from_invoice>
+   - Do NOT calculate the amount yourself — use the exact amount from the invoice response
+7. If task says "send": PUT /invoice/{id}/:send?sendType=EMAIL (after invoice creation)
 
 ### Verified Field Gotchas
 - Order lines: "count" NOT "quantity"
 - Order: deliveryDate is REQUIRED
+- Product number: only from prompt, never invented
 - Product: do NOT set vatType, account, or currency — causes validation errors
+- Payment amount: ALWAYS read from invoice response, never calculate VAT yourself
 - Payment: ALL params are query params, not body
 - Invoice needs orders array, cannot be created standalone
 - "Enhetspris må være uten mva" error: set isPrioritizeAmountsIncludingVat: false on the order, and use unitPriceExcludingVatCurrency on order lines
@@ -297,17 +305,21 @@ Keywords: betaling, payment, Zahlung, pago, paiement, pagamento, registrer betal
 | Bank account | GET /ledger/account?number=1920&fields=id,version,bankAccountNumber | Invoice needs bank account |
 
 ### Verified Workflow
-1. GET /invoice?invoiceDateFrom=YYYY-01-01&invoiceDateTo=YYYY-12-31&customerId=N&fields=id,invoiceNumber,amount,amountOutstanding,comment
-2. GET /invoice/paymentType — find paymentTypeId
-3. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
+NOTE: The invoice may ALREADY EXIST (pre-loaded). Try to FIND it first.
+1. GET /customer?organizationNumber=N or ?name=X — find the customer
+2. GET /invoice?invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&customerId=N&fields=id,invoiceNumber,amount,amountOutstanding,comment — find existing invoice
+3. If invoice NOT found: create it (customer → order → invoice flow)
+4. GET /invoice/paymentType — find paymentTypeId
+5. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=<AMOUNT_FROM_INVOICE>
+   - Use the "amount" value from the invoice, NOT a calculated value
 
 ### Verified Field Gotchas
+- paidAmount: ALWAYS use the "amount" from the GET /invoice response, never calculate it
 - ALL payment params are query params, NOT body. Pass body="{}"
-- GET /invoice REQUIRES invoiceDateFrom AND invoiceDateTo — will fail without them
-- Invoice valid fields: id, invoiceNumber, amount, amountOutstanding, amountCurrency, comment, invoiceDate, invoiceDueDate, isCreditNote
-- Invoice does NOT have: "description" (use "comment"), "amountPaid" (use "amountOutstanding"), "amountExcludingVat" fails in fields
+- GET /invoice REQUIRES invoiceDateFrom AND invoiceDateTo — use wide range 2020-2030
+- Invoice valid fields: id, invoiceNumber, amount, amountOutstanding, comment, invoiceDate, invoiceDueDate
+- Invoice does NOT have: "description" (use "comment"), "amountPaid", "amountExcludingVat"
 - Account path: ALWAYS /ledger/account — NOT /account or /bank
-- paidAmount must match invoice amount for full payment
 
 ---
 
@@ -322,21 +334,27 @@ Keywords: tilbakeføring, stornering, reversering, zurückgebucht, stornieren, r
 | Payment type | GET /invoice/paymentType | Need paymentTypeId |
 | Bank account | GET /ledger/account?number=1920&fields=id,version,bankAccountNumber | May need to set bank account |
 
-### IMPORTANT: Fresh sandbox has NO invoices
-On a fresh competition sandbox, the invoice doesn't exist yet. You must:
-1. Create the customer
-2. Check/set bank account on ledger account 1920
-3. Create the invoice (order → invoice)
-4. Register the payment
-5. Then reverse the payment with negative amount
+### IMPORTANT: Try to FIND the invoice first, CREATE if not found
+The task describes an existing paid invoice. Try to find it:
+1. Find the customer
+2. Search for the invoice
+3. If found with payment → just reverse
+4. If NOT found → create everything from scratch
 
 ### Verified Workflow
-1. POST /customer — create the customer
-2. GET /ledger/account?number=1920&fields=id,version,bankAccountNumber — check bank account
-3. If empty: PUT /ledger/account/{id} with bankAccountNumber
-4. POST /order → POST /invoice — create the original invoice
-5. GET /invoice/paymentType — find paymentTypeId
-6. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=AMOUNT — register original payment
+1. GET /customer?organizationNumber=N or ?name=X — find customer
+2. If not found: POST /customer
+3. GET /invoice?invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&customerId=N&fields=id,amount,amountOutstanding,comment — find invoice
+4. If invoice found and amountOutstanding=0 (already paid):
+   - GET /invoice/paymentType → paymentTypeId
+   - PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=-<amount> — reverse
+5. If invoice NOT found:
+   a. Check/set bank account on ledger account 1920
+   b. POST /order → POST /invoice — create invoice
+   c. Read "amount" from invoice response
+   d. GET /invoice/paymentType → paymentTypeId
+   e. PUT /:payment with paidAmount=<amount_from_invoice> — register payment
+   f. PUT /:payment with paidAmount=-<amount_from_invoice> — reverse payment
 7. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=-AMOUNT — reverse with NEGATIVE amount
 
 ### Verified Field Gotchas

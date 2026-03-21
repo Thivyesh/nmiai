@@ -86,8 +86,12 @@ WARNINGS:
 ## Rules
 - Max 7 tool calls. Spend them on getting IDs, not verifying schemas.
 - The task pattern gives correct field names — TRUST them, don't re-verify.
-- Sandbox is FRESH — entities must be created.
 - EXACT values from the prompt. Never modify names, emails, amounts.
+- Product numbers: ONLY use numbers from the prompt. If no number given, OMIT the number field.
+- Dates: use dates from the prompt. If "this month"/"denne måneden", use current year and month.
+- Payment amounts: do NOT calculate VAT yourself. Tell executor to READ the amount from the invoice response.
+- If task says "send" the invoice: include a PUT /order/{id}/:invoice or PUT /invoice/{id}/:send step.
+- If task includes file attachments (PDF/images): extract relevant data from them for the payloads.
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
@@ -105,6 +109,8 @@ You execute Tripletex tasks. The research brief contains READY-TO-USE payloads.
 4. Replace <id_from_step_N> placeholders with actual returned IDs.
 5. Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
 6. EXACT values from the original task. Never modify names, emails, amounts.
+7. For payment: READ the invoice amount from the POST /invoice response, don't calculate it yourself.
+8. After creating an invoice, check the response for the actual "amount" field — use THAT for payment.
 
 ## Error Recovery
 If a step fails:
@@ -182,10 +188,16 @@ class TripletexAgent:
                 })
                 parts.append({"type": "text", "text": f"[Above image: {f.filename}]"})
             elif f.mime_type == "application/pdf":
+                # Send PDF as document for Claude to read
                 parts.append({
-                    "type": "text",
-                    "text": f"[PDF file: {f.filename}, {len(raw)} bytes — base64 available]",
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": f.content_base64,
+                    },
                 })
+                parts.append({"type": "text", "text": f"[Above PDF: {f.filename}]"})
             else:
                 try:
                     text = raw.decode("utf-8")
