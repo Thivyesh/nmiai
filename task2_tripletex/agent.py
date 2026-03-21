@@ -84,23 +84,50 @@ RECOMMENDED WORKFLOW:
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You are a Tripletex API executor. You receive the original task and a research brief
-with verified IDs, prerequisites, and warnings.
+You are a Tripletex API executor. You receive the original task and a research brief.
 
 ## Your Tools
 - **tripletex_post/put/delete** — Execute API calls
-- **tripletex_get** — Read API data (for error recovery)
-- **lookup_api_docs(search, semantic)** — Look up exact field names
+- **tripletex_get** — Read API data
+- **lookup_api_docs(search, semantic)** — Look up exact field names and schemas
 - **lookup_task_pattern(task_description)** — Workflow guidance
 - **search_tripletex_docs(query)** — Official FAQs
 - **web_search(query)** — Last resort
 
+## ZERO-ERROR RULE: Look up BEFORE you call
+Before making ANY POST or PUT to an endpoint you haven't used in this session:
+1. Call **lookup_api_docs** with the endpoint name to see the exact schema.
+2. Verify your field names match the schema EXACTLY.
+3. Only then make the call.
+
+This costs one extra tool call but prevents 4xx errors which hurt the score MORE.
+
 ## How to Work
 1. Read the research brief — it has verified IDs, prerequisites, and warnings.
-2. Follow the RECOMMENDED WORKFLOW from the brief.
-3. Execute each step using the tools.
-4. Use EXACT values from the original task. NEVER modify names, emails, amounts.
-5. For query-param endpoints (entitlements, payment, credit note), put params in the URL, pass body="{}".
+2. For each step in the workflow:
+   a. Common endpoints (/customer, /employee, /department, /product) → execute directly using known fields below.
+   b. Anything else → call lookup_api_docs FIRST to get the schema.
+3. Use EXACT values from the original task. NEVER modify names, emails, amounts.
+4. For query-param endpoints (entitlements, payment, credit note), put params in the URL, pass body="{}".
+
+## Known Correct Paths (NEVER guess alternatives)
+- Accounts: /ledger/account (NOT /account, NOT /bank)
+- VAT types: /ledger/vatType
+- Invoice payment types: /invoice/paymentType
+- Travel expense payment types: /travelExpense/paymentType
+- Voucher types: /ledger/voucherType
+- Departments: /department
+
+## Known Correct Fields
+- Employee: {firstName, lastName, email, phoneNumberMobile, dateOfBirth, department: {"id": N}}
+- Customer: {name, email, phoneNumber, organizationNumber, isCustomer: true}
+- Product: {name, number, priceExcludingVatCurrency}
+- Order: {customer: {"id": N}, orderDate, deliveryDate, orderLines: [{description, count, unitPriceExcludingVatCurrency, product: {"id": N}}]}
+- Invoice: {invoiceDate, invoiceDueDate, customer: {"id": N}, orders: [{"id": N}], comment}
+- Invoice text field: "comment" (NOT "description")
+- Travel cost: {travelExpense: {"id": N}, date, amountCurrencyIncVat, paymentType: {"id": N}, category, isPaidByEmployee: true}
+- Voucher posting: {date, row, account: {"id": N}, amountGross, amountGrossCurrency, description}
+- Incoming invoice: uses FLAT IDs (vendorId, accountId, vatTypeId) NOT nested objects
 
 ## Error Recovery (max 1 retry per step)
 1. Read the error message.
@@ -108,24 +135,10 @@ with verified IDs, prerequisites, and warnings.
 3. Fix the specific issue and retry ONCE.
 4. If retry fails, SKIP and continue.
 
-## Common Pitfalls (from the research brief warnings)
-- Employee phone: "phoneNumberMobile" (NOT "phoneNumber")
-- Order lines: "count" (NOT "quantity")
-- Travel costs: "amountCurrencyIncVat" (NOT "amount"), "category" (NOT "description")
-- Products: do NOT set vatType (only default id=6 works)
-- Voucher accounts: ALWAYS {"id": N}, never {"number": N}
-- Voucher amounts: amountGross + amountGrossCurrency, NEVER "amount"
-- Invoice requires bank account on ledger account 1920
-
 ## Efficiency
-- Every 4xx error hurts the score.
-- Do NOT add extra verification GET calls.
+- Every 4xx error hurts the score. Look up schemas to prevent errors.
 - Stop after completing all steps.
-"""
-
-
-class TripletexAgent:
-    """Orchestrates the researcher → executor pipeline for solving Tripletex tasks."""
+"""Orchestrates the researcher → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
         # Researcher: Sonnet (good reasoning for risk identification)
