@@ -44,6 +44,7 @@ Keywords: faktura, invoice, Rechnung, factura, facture, fatura
 - Product: do NOT set vatType, account, or currency — causes validation errors
 - Payment: ALL params are query params, not body
 - Invoice needs orders array, cannot be created standalone
+- "Enhetspris må være uten mva" error: set isPrioritizeAmountsIncludingVat: false on the order, and use unitPriceExcludingVatCurrency on order lines
 
 ---
 
@@ -109,7 +110,12 @@ Keywords: produkt, product, Produkt, producto, produit, produto
 | VAT type ID | GET /ledger/vatType?fields=id,number,name,percentage | If prompt specifies a VAT rate, find the matching outgoing vatType |
 
 ### Verified Workflow
-1. If prompt specifies VAT rate: GET /ledger/vatType to find correct ID
+1. If prompt specifies VAT rate: GET /ledger/vatType to find correct outgoing ("utgående") vatType
+   - 25% = look for "Utgående avgift, høy sats" (id varies per sandbox)
+   - 15% = look for "Utgående avgift, middels sats" (food/drink rate)
+   - 12% = look for "Utgående avgift, lav sats" (transport rate)
+   - 0% = id=6 default (no VAT)
+   - NOTE: Only OUTGOING (utgående) vatTypes work on products. INCOMING (inngående/fradrag) will fail.
 2. POST /product — {name, number, priceExcludingVatCurrency, vatType: {"id": N}}
    - Only set vatType if the prompt explicitly asks for a specific VAT rate
    - If no VAT mentioned, OMIT vatType (default id=6 = no VAT)
@@ -134,10 +140,13 @@ Keywords: reiseregning, travel expense, Reisekostenabrechnung, nota de gastos, n
 
 ### Verified Workflow
 1. POST /employee (if needed) — with department
-2. POST /travelExpense — {employee: {"id": N}, title, date: "YYYY-MM-DD", department: {"id": N}}
+2. POST /travelExpense — include travelDetails if trip dates are mentioned:
+   {employee: {"id": N}, title, date: "YYYY-MM-DD", department: {"id": N},
+    travelDetails: {isForeignTravel: false, isDayTrip: false,
+    departureDate: "YYYY-MM-DD", returnDate: "YYYY-MM-DD",
+    departureFrom: "City", destination: "City", purpose: "description"}}
 3. For regular expenses (flight, taxi, hotel): POST /travelExpense/cost for EACH line
-4. For per diem/diett/dietas: POST /travelExpense/cost with EACH DAY as separate line (count × rate)
-   - Create ONE cost line per day, OR one cost line with total amount
+4. For per diem/diett/dietas: POST /travelExpense/cost with EACH DAY as separate line
    - Always include "date" field on cost lines
 
 ### Verified Field Gotchas
@@ -228,6 +237,7 @@ Keywords: bilag, voucher, dimensjon, dimension, postering, Buchung, journal entr
 - Amounts: use amountGross AND amountGrossCurrency (both required, must be equal for NOK)
 - Do NOT use "amount" — it does not work
 - Include "date" and "row" on each posting
+- "Kunde mangler"/"Leverandør mangler" error: the account has ledgerType CUSTOMER/SUPPLIER — include customer/supplier ID in the posting
 - Postings MUST balance (sum of amountGross = zero)
 - freeAccountingDimension1/2/3 for linking to dimension values
 - Some accounts (1920, 2400) are system-managed — use 1900 Kontanter for balancing
