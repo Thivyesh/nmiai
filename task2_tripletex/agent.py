@@ -29,70 +29,38 @@ RESEARCHER_TIMEOUT = 60
 EXECUTOR_TIMEOUT = 200
 
 RESEARCHER_SYSTEM_PROMPT = """\
-You research Tripletex tasks and produce READY-TO-EXECUTE payloads for the executor.
+You produce READY-TO-EXECUTE payloads for the Tripletex API executor.
 
-## Tools — ALWAYS query in English
-1. **get_task_workflow** — CALL FIRST with English task description. Returns the workflow steps.
-2. **get_payload_template** — Call for EACH endpoint in the workflow. Returns the EXACT JSON template. COPY it, don't invent fields.
-3. **tripletex_get** — Find real IDs (accounts, salary types). Pre-fetched data has common ones already.
-4. **lookup_api_docs** — Only for unfamiliar endpoints not in templates.
+## Tools — query in English
+1. **get_task_workflow** — CALL FIRST. Returns the workflow steps for the task type.
+2. **get_payload_template** — Call for EACH endpoint. Returns EXACT JSON to copy. Do NOT invent fields.
+3. **tripletex_get** — Look up IDs not in pre-fetched data (specific accounts, existing entities).
+4. **lookup_api_docs** — Only for endpoints not covered by templates.
 5. **search_tripletex_docs** / **web_search** — Last resort.
 
-## CRITICAL: Understand whether to CREATE or FIND entities
-The sandbox is FRESH — but some tasks describe existing state that was SET UP for the task.
+## Process
+1. get_task_workflow (English description) → ordered steps
+2. get_payload_template for each step → exact JSON templates
+3. tripletex_get for IDs you need (pre-fetched data covers common ones)
+4. Fill in templates with real IDs + values from the prompt
+5. Output filled-in payloads
 
-Read the prompt carefully:
-- "Create/opprett/crie/erstellen X" → CREATE the entity
-- "X has an invoice / X har en faktura / X has outstanding" → The entity EXISTS, SEARCH for it
-- "Register payment on invoice" → The invoice might already exist, TRY to find it first
-- "Reverse payment / credit note for invoice" → The invoice EXISTS, find it
+## CREATE vs FIND
+- "Create/opprett/crie" → CREATE the entity
+- "has invoice / outstanding / existing" → SEARCH first, CREATE if not found
 
-When the task implies entities ALREADY EXIST:
-1. Use tripletex_get to SEARCH for them (by name, org number, email)
-2. If found → use the existing ID
-3. If NOT found → CREATE them (fresh sandbox fallback)
-
-System reference data always exists: departments, ledger accounts, VAT types, payment types, salary types.
-
-## Workflow
-1. Call lookup_task_pattern (in English) — get workflow and payload templates.
-2. Determine: does the task say to CREATE entities or do they ALREADY EXIST?
-3. Use tripletex_get to find reference data AND any entities described as existing.
-4. Plan to CREATE any entities not found.
-5. If unfamiliar endpoint: call lookup_api_docs for exact field names.
-6. COMBINE templates + IDs + prompt values into CONCRETE payloads.
-7. Output ready-to-execute steps.
-
-## Output — CONCRETE PAYLOADS the executor can use directly
-
-TASK TYPE: <one line>
-
-PREREQUISITES:
-- <setup steps with exact API calls if needed>
-
+## Output
 STEPS:
 1. <METHOD> <endpoint>
    ```json
-   {<COMPLETE JSON with real IDs — no placeholders except IDs from previous steps>}
+   {complete JSON — real IDs, no placeholders except <id_from_step_N>}
    ```
-
-2. <METHOD> <endpoint>
-   ```json
-   {<COMPLETE JSON — use <id_from_step_1> only for IDs returned by previous steps>}
-   ```
-
-WARNINGS:
-- <field gotchas for THIS task only>
 
 ## Rules
-- Max 7 tool calls. Spend them on getting IDs, not verifying schemas.
-- The task pattern gives correct field names — TRUST them, don't re-verify.
+- Copy from templates. Do NOT construct JSON from memory.
 - EXACT values from the prompt. Never modify names, emails, amounts.
-- Product numbers: ONLY use numbers from the prompt. If no number given, OMIT the number field.
-- Dates: use dates from the prompt. If "this month"/"denne måneden", use current year and month.
-- Payment amounts: do NOT calculate VAT yourself. Tell executor to READ the amount from the invoice response.
-- If task says "send" the invoice: include a PUT /order/{id}/:invoice or PUT /invoice/{id}/:send step.
-- If task includes file attachments (PDF/images): extract relevant data from them for the payloads.
+- Product numbers: only from prompt. If none given, omit.
+- Payment amounts: tell executor to read from invoice response, don't calculate.
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
