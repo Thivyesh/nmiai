@@ -14,6 +14,7 @@ from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from langgraph.prebuilt import create_react_agent
 
 from task2_tripletex.models import SolveRequest, SolveResponse
+from task2_tripletex.pdf_extractor import extract_file_data
 from task2_tripletex.tools import (
     EXECUTOR_TOOLS,
     PLANNER_TOOLS,
@@ -309,14 +310,22 @@ class TripletexAgent:
         ref_data = self._prefetch_reference_data()
         logger.info("Pre-fetched reference data:\n%s", ref_data)
 
-        # Build message with task + pre-fetched data + files
+        # Extract file data using Sonnet (if files attached)
+        file_data = ""
+        if request.files:
+            try:
+                file_data = await extract_file_data(request.files)
+                logger.info("Extracted file data: %d chars", len(file_data))
+            except Exception as e:
+                logger.warning("File extraction failed: %s", e)
+
+        # Build message with task + pre-fetched data + extracted file data
         content_parts = [
             {"type": "text", "text": f"## Task\n\n{request.prompt}"},
             {"type": "text", "text": f"\n{ref_data}"},
         ]
-        if request.files:
-            content_parts.append({"type": "text", "text": "\n## Attached Files\n"})
-            content_parts.extend(self._extract_file_content(request))
+        if file_data:
+            content_parts.append({"type": "text", "text": file_data})
 
         agent_config = {**config, "recursion_limit": 40}
         message = HumanMessage(content=content_parts)
