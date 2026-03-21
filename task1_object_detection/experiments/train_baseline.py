@@ -14,7 +14,14 @@ import argparse
 import json
 from pathlib import Path
 
+import torch
+# ultralytics 8.1.0 uses pickle-based model saves; torch 2.6+ defaults to weights_only=True
+torch.serialization.add_safe_globals([])  # noqa
+_original_load = torch.load
+torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights_only": False})
+
 import mlflow
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
 
 TASK_ROOT = Path(__file__).resolve().parent.parent
 YOLO_DATASET_DIR = TASK_ROOT / "output" / "yolo_dataset"
@@ -38,6 +45,8 @@ def train(
         return
 
     # Enable MLflow in ultralytics (auto-logs all training metrics)
+    import os
+    os.environ["MLFLOW_TRACKING_URI"] = "http://127.0.0.1:5000"
     settings.update({"mlflow": True})
 
     # Set MLflow experiment

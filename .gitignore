@@ -15,3 +15,7 @@ task1_object_detection/output/
 task1_object_detection/analysis_plots/
 mlruns/
 mlartifacts/
+mlflow.db
+runs/
+*.pt
+.DS_Store

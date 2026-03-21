@@ -12,7 +12,12 @@ import argparse
 import json
 from pathlib import Path
 
+import torch
+_original_load = torch.load
+torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, "weights_only": False})
+
 import mlflow
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
 
 TASK_ROOT = Path(__file__).resolve().parent.parent
 YOLO_DATASET_DIR = TASK_ROOT / "output" / "yolo_dataset"
