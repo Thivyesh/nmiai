@@ -23,125 +23,70 @@ from task2_tripletex.tools import (
 
 logger = logging.getLogger(__name__)
 
-TOTAL_TIMEOUT = 270  # 4.5 min total budget
+TOTAL_TIMEOUT = 270
 RESEARCHER_TIMEOUT = 60
 EXECUTOR_TIMEOUT = 200
 
 RESEARCHER_SYSTEM_PROMPT = """\
-You are a research assistant for a Tripletex accounting agent. Your job is to investigate
-the task and provide everything the executor needs to succeed on the FIRST try.
+You research Tripletex accounting tasks. Investigate and provide what the executor needs.
 
-## Your Tools
-1. **lookup_task_pattern(task_description)** — CALL FIRST. Returns the workflow, required fields, and common mistakes.
-2. **tripletex_get(endpoint, params)** — Read the live API to find real IDs and check prerequisites.
-3. **lookup_api_docs(search, semantic)** — Look up exact field names and schemas.
-4. **search_tripletex_docs(query)** — Official Tripletex FAQs and guides.
-5. **web_search(query)** — Last resort for unknown tasks.
+## Tools (priority order)
+1. **lookup_task_pattern** — CALL FIRST. Returns workflow, risks, and field gotchas.
+2. **tripletex_get** — Find real IDs and verify prerequisites.
+3. **lookup_api_docs** — Exact schemas for unfamiliar endpoints.
+4. **search_tripletex_docs** — Official FAQs if stuck.
+5. **web_search** — Last resort.
 
-## Your Workflow
-1. Call lookup_task_pattern to understand the task type and workflow.
-2. Identify the RISKS — what could cause the executor to fail:
-   - Does it need a department ID? → GET /department
-   - Does it involve invoices? → CHECK bank account: GET /ledger/account?number=1920&fields=id,version,bankAccountNumber
-   - Does it need payment type IDs? → GET /travelExpense/paymentType or /invoice/paymentType
-   - Does it reference existing entities? → GET them to find IDs
-   - Does it involve products? → Do NOT set vatType (only default works)
-   - Does it involve vouchers? → GET account IDs (never use account numbers)
-3. Verify each risk using tripletex_get.
-4. Output a RESEARCH BRIEF with your findings.
+## Workflow
+1. Call lookup_task_pattern — it tells you what to check.
+2. Verify the risks it identifies using tripletex_get.
+3. Output findings.
 
-## Output Format
-TASK TYPE: <e.g., "Create Invoice with Payment", "Create Employee as Admin">
-TASK PATTERN: <key workflow steps from the pattern>
+## Output
+TASK TYPE: <one line>
 
 FINDINGS:
-- Department ID: <N or "not needed">
-- Bank account: <set/not set, account ID if needed>
-- Payment type IDs: <if relevant>
-- Existing entities found: <IDs>
-- Prerequisites: <what needs to be created/set up first>
+- <IDs, prerequisites, risks — only what's relevant>
 
-COMMON MISTAKES TO AVOID:
-- Account path is /ledger/account NOT /account or /bank
-- Invoice "description" field doesn't exist — use "comment"
-- Invoice has no "amountPaid" field — use "amountOutstanding"
-- GET /invoice REQUIRES invoiceDateFrom AND invoiceDateTo
+WORKFLOW:
+1. <step with real IDs>
 
-RISKS & WARNINGS:
-- <specific things the executor must watch out for>
-- <field name gotchas, required fields, etc.>
-
-RECOMMENDED WORKFLOW:
-1. <step with real IDs filled in>
-2. <step>
-...
+WARNINGS:
+- <only field gotchas relevant to THIS task>
 
 ## Rules
-- Be FAST. Max 5 tool calls. Don't over-research.
-- Focus on RISKS — things that would cause 4xx errors.
-- The sandbox is FRESH — entities must be created, not searched for.
-- Use EXACT values from the prompt. NEVER modify names, emails, amounts.
+- Max 5 tool calls. The task pattern tells you what to check — just verify those.
+- Sandbox is FRESH — entities must be created.
+- EXACT values from the prompt.
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You are a Tripletex API executor. You receive the original task and a research brief.
+You execute Tripletex accounting tasks using the research brief as context.
 
-## Your Tools
-- **tripletex_post/put/delete** — Execute API calls
-- **tripletex_get** — Read API data
-- **lookup_api_docs(search, semantic)** — Look up exact field names and schemas
-- **lookup_task_pattern(task_description)** — Workflow guidance
-- **search_tripletex_docs(query)** — Official FAQs
-- **web_search(query)** — Last resort
-
-## ZERO-ERROR RULE: Look up BEFORE you call
-Before making ANY POST or PUT to an endpoint you haven't used in this session:
-1. Call **lookup_api_docs** with the endpoint name to see the exact schema.
-2. Verify your field names match the schema EXACTLY.
-3. Only then make the call.
-
-This costs one extra tool call but prevents 4xx errors which hurt the score MORE.
+## Tools
+- **tripletex_post/put/delete** — API calls
+- **tripletex_get** — Read data
+- **lookup_api_docs** — Call BEFORE any unfamiliar endpoint to get exact field names
+- **lookup_task_pattern** / **search_tripletex_docs** / **web_search** — If stuck
 
 ## How to Work
-1. Read the research brief — it has verified IDs, prerequisites, and warnings.
-2. For each step in the workflow:
-   a. Common endpoints (/customer, /employee, /department, /product) → execute directly using known fields below.
-   b. Anything else → call lookup_api_docs FIRST to get the schema.
-3. Use EXACT values from the original task. NEVER modify names, emails, amounts.
-4. For query-param endpoints (entitlements, payment, credit note), put params in the URL, pass body="{}".
+1. Read the research brief for IDs, prerequisites, and warnings.
+2. For each step: if unfamiliar endpoint → lookup_api_docs first → then call.
+3. EXACT values from the original task. Never modify names, emails, amounts.
+4. Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
 
-## Known Correct Paths (NEVER guess alternatives)
-- Accounts: /ledger/account (NOT /account, NOT /bank)
-- VAT types: /ledger/vatType
-- Invoice payment types: /invoice/paymentType
-- Travel expense payment types: /travelExpense/paymentType
-- Voucher types: /ledger/voucherType
-- Departments: /department
-
-## Known Correct Fields
-- Employee: {firstName, lastName, email, phoneNumberMobile, dateOfBirth, department: {"id": N}}
-- Customer: {name, email, phoneNumber, organizationNumber, isCustomer: true}
-- Product: {name, number, priceExcludingVatCurrency}
-- Order: {customer: {"id": N}, orderDate, deliveryDate, orderLines: [{description, count, unitPriceExcludingVatCurrency, product: {"id": N}}]}
-- Invoice: {invoiceDate, invoiceDueDate, customer: {"id": N}, orders: [{"id": N}], comment}
-- Invoice text field: "comment" (NOT "description")
-- Travel cost: {travelExpense: {"id": N}, date, amountCurrencyIncVat, paymentType: {"id": N}, category, isPaidByEmployee: true}
-- Voucher posting: {date, row, account: {"id": N}, amountGross, amountGrossCurrency, description}
-- Incoming invoice: uses FLAT IDs (vendorId, accountId, vatTypeId) NOT nested objects
-
-## Error Recovery (max 1 retry per step)
-1. Read the error message.
-2. Call lookup_api_docs for the correct schema.
-3. Fix the specific issue and retry ONCE.
-4. If retry fails, SKIP and continue.
+## Error Recovery
+If a step fails: lookup_api_docs → fix → retry ONCE → skip if still failing.
 
 ## Efficiency
-- Every 4xx error hurts the score. Look up schemas to prevent errors.
-- Stop after completing all steps.
-"""Orchestrates the researcher → executor pipeline for solving Tripletex tasks."""
+Every 4xx error hurts the score. Look up schemas to prevent errors.
+"""
+
+
+class TripletexAgent:
+    """Orchestrates the researcher → executor pipeline for solving Tripletex tasks."""
 
     def __init__(self):
-        # Researcher: Sonnet (good reasoning for risk identification)
         self.researcher_llm = ChatAnthropic(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -149,7 +94,6 @@ This costs one extra tool call but prevents 4xx errors which hurt the score MORE
             max_retries=2,
             timeout=30.0,
         )
-        # Executor: Opus (best at following instructions precisely)
         self.executor_llm = ChatAnthropic(
             model="claude-opus-4-20250514",
             max_tokens=4096,
@@ -157,7 +101,6 @@ This costs one extra tool call but prevents 4xx errors which hurt the score MORE
             max_retries=2,
             timeout=60.0,
         )
-        # Fallback: Gemini Flash
         self.fallback_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             temperature=0,
