@@ -241,23 +241,55 @@ Keywords: bilag, voucher, dimensjon, dimension, postering, Buchung, journal entr
 | Balancing account | GET another account for the opposite posting | Postings must sum to zero |
 
 ### Verified Workflow
-1. GET /ledger/account?number=NNNN&fields=id — get account IDs
-2. If task mentions dimensions/kostsenter:
-   a. POST /ledger/accountingDimensionName — REQUIRED FIRST, creates the dimension container
+1. GET /ledger/account?number=NNNN&fields=id — get EVERY account ID you need
+2. GET /ledger/voucherType?fields=id,name — get a valid voucherType ID (NEVER use id=1)
+3. If task mentions dimensions/kostsenter:
+   a. POST /ledger/accountingDimensionName — REQUIRED FIRST
       {"dimensionName": "Kostsenter", "description": "Cost center", "dimensionIndex": 1, "active": true}
-      This is NOT automatic — you MUST create it before creating values!
    b. POST /ledger/accountingDimensionValue — for EACH value
       {"displayName": "IT", "dimensionIndex": 1, "active": true, "number": "IT", "showInVoucherRegistration": true}
-3. POST /ledger/voucher?sendToLedger=true — with postings
+4. POST /ledger/voucher?sendToLedger=true — EXACT format below:
 
-### Verified Field Gotchas
-- Account: ALWAYS {"id": N} — NEVER {"number": N}
-- Amounts: use amountGross AND amountGrossCurrency (both required, must be equal for NOK)
-- Do NOT use "amount" — it does not work
-- Include "date" and "row" on each posting
-- "Kunde mangler"/"Leverandør mangler" error: the account has ledgerType CUSTOMER/SUPPLIER — include customer/supplier ID in the posting
+### VOUCHER PAYLOAD — Copy this format EXACTLY
+```
+POST /ledger/voucher?sendToLedger=true
+{
+  "date": "YYYY-MM-DD",
+  "description": "Description of the posting",
+  "voucherType": {"id": <id_from_GET_voucherType>},
+  "postings": [
+    {
+      "date": "YYYY-MM-DD",
+      "row": 1,
+      "account": {"id": <id_from_GET_account>},
+      "amountGross": 1000,
+      "amountGrossCurrency": 1000,
+      "description": "Debit posting"
+    },
+    {
+      "date": "YYYY-MM-DD",
+      "row": 2,
+      "account": {"id": <id_from_GET_another_account>},
+      "amountGross": -1000,
+      "amountGrossCurrency": -1000,
+      "description": "Credit posting"
+    }
+  ]
+}
+```
+
+### CRITICAL Voucher Rules — READ CAREFULLY
+- Account: GET the ID first. NEVER use account number as ID.
+  WRONG: {"id": 1920}  WRONG: {"id": 8050}
+  RIGHT: GET /ledger/account?number=1920 → use returned id
+- VoucherType: GET the ID first. NEVER hardcode id=1.
+  GET /ledger/voucherType → use an ID from the response
+- Amounts: ONLY use "amountGross" and "amountGrossCurrency"
+  WRONG: debitAmount, creditAmount, amount
+  RIGHT: amountGross (positive=debit, negative=credit)
+- EVERY posting needs: date, row, account, amountGross, amountGrossCurrency
 - Postings MUST balance (sum of amountGross = zero)
-- freeAccountingDimension1/2/3 for linking to dimension values
+- "Kunde mangler" error: account has ledgerType CUSTOMER — include customer: {"id": N} in posting
 - Some accounts (1920, 2400) are system-managed — use 1900 Kontanter for balancing
 
 ---
