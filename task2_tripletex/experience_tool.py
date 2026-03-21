@@ -32,7 +32,7 @@ def search_past_experience(task_description: str) -> str:
     except Exception:
         return "Experience search unavailable (Elasticsearch not running)."
 
-    # Multi-match across task prompt and tool summary
+    # Multi-match across all searchable fields, sorted by relevance
     results = es.search(
         index=INDEX,
         body={
@@ -40,15 +40,16 @@ def search_past_experience(task_description: str) -> str:
             "query": {
                 "multi_match": {
                     "query": task_description,
-                    "fields": ["task_prompt^3", "tool_summary", "failed_endpoints_text"],
-                    "type": "best_fields",
+                    "fields": [
+                        "task_prompt^2",
+                        "tool_summary^3",
+                        "failed_endpoints_text^2",
+                        "successful_endpoints^2",
+                    ],
+                    "type": "most_fields",
                     "fuzziness": "AUTO",
                 }
             },
-            "sort": [
-                {"total_errors": "asc"},  # Prefer low-error traces
-                "_score",
-            ],
         },
     )
 

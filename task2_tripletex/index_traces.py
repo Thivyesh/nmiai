@@ -52,7 +52,27 @@ def main():
         tool_lines = []
         for tc in t.get("tool_calls", []):
             status = "ERR" if tc["is_error"] else "OK"
-            tool_lines.append(f"{tc['name']} {tc.get('endpoint','')} {status} {tc.get('error_msg','')}")
+            endpoint = tc.get("endpoint", "")
+            tool_lines.append(f"{tc['name']} {endpoint} {status} {tc.get('error_msg','')}")
+
+        # Add English tags based on endpoints used for better search
+        endpoints_used = " ".join(tc.get("endpoint", "") for tc in t.get("tool_calls", []))
+        tags = []
+        if "/invoice" in endpoints_used: tags.append("invoice")
+        if "/customer" in endpoints_used: tags.append("customer")
+        if "/employee" in endpoints_used: tags.append("employee")
+        if "/product" in endpoints_used: tags.append("product")
+        if "/order" in endpoints_used: tags.append("order")
+        if "/travelExpense" in endpoints_used: tags.append("travel expense")
+        if "/voucher" in endpoints_used: tags.append("voucher journal entry")
+        if "/payment" in endpoints_used or "/:payment" in endpoints_used: tags.append("payment")
+        if "/supplier" in endpoints_used: tags.append("supplier")
+        if "/salary" in endpoints_used: tags.append("salary payroll")
+        if "/department" in endpoints_used: tags.append("department")
+        if "/project" in endpoints_used: tags.append("project")
+        if "Dimension" in endpoints_used or "dimension" in endpoints_used: tags.append("dimension")
+        if "creditNote" in endpoints_used: tags.append("credit note")
+        if "entitlement" in endpoints_used: tags.append("admin entitlements")
 
         failed_text = "; ".join(
             f"{fe['endpoint']}: {fe['error']}" for fe in t.get("failed_endpoints", [])
@@ -61,12 +81,12 @@ def main():
         doc = {
             "trace_id": t["trace_id"],
             "timestamp": t["timestamp"],
-            "task_prompt": t["task_prompt"],
+            "task_prompt": t["task_prompt"] + " " + " ".join(tags),
             "total_tool_calls": t["total_tool_calls"],
             "total_errors": t["total_errors"],
             "successful_endpoints": t.get("successful_endpoints", []),
             "failed_endpoints_text": failed_text,
-            "tool_summary": "\n".join(tool_lines),
+            "tool_summary": "\n".join(tool_lines) + "\n" + " ".join(tags),
         }
 
         es.index(index=INDEX, id=t["trace_id"], body=doc)
