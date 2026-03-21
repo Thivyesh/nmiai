@@ -105,6 +105,9 @@ Only use lookup tools when a step actually fails.
 class TripletexAgent:
     """Orchestrates the researcher → executor pipeline for solving Tripletex tasks."""
 
+    # Serialize requests — concurrent requests corrupt each other's API client
+    _lock = asyncio.Lock()
+
     def __init__(self):
         self.researcher_llm = ChatAnthropic(
             model="claude-sonnet-4-20250514",
@@ -220,7 +223,12 @@ class TripletexAgent:
         return brief
 
     async def solve(self, request: SolveRequest) -> SolveResponse:
-        """Run the researcher → executor pipeline."""
+        """Run the researcher → executor pipeline. Serialized to prevent client corruption."""
+        async with self._lock:
+            return await self._solve_inner(request)
+
+    async def _solve_inner(self, request: SolveRequest) -> SolveResponse:
+        """Inner solve method, runs under lock."""
         start_time = time.time()
 
         client = TripletexClient(
