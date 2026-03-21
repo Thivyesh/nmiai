@@ -1,7 +1,12 @@
-"""Search past task execution history for learning from experience."""
+"""Search past task execution history using hybrid BM25 + semantic search."""
 
+import json
 import logging
+import os
+from pathlib import Path
 
+import numpy as np
+import requests
 from elasticsearch import Elasticsearch
 from langchain_core.tools import tool
 
@@ -9,83 +14,160 @@ logger = logging.getLogger(__name__)
 
 ES_URL = "http://localhost:9200"
 INDEX = "tripletex-traces"
+TEI_URL = os.getenv("TEI_URL", "http://localhost:8080")
+TRACE_PATH = Path(__file__).parent / "trace_history.json"
+
+# In-memory semantic index for traces
+_trace_embeddings: np.ndarray | None = None
+_trace_docs: list[dict] | None = None
 
 
-@tool
-def search_past_experience(task_description: str) -> str:
-    """Search past task executions to learn what worked and what failed.
+def _build_semantic_index():
+    """Build semantic embeddings for trace prompts + tool summaries."""
+    global _trace_embeddings, _trace_docs
+    if _trace_embeddings is not None:
+        return
 
-    Returns similar past tasks with their API calls, errors, and outcomes.
-    Use this to avoid repeating mistakes and copy successful approaches.
+    if not TRACE_PATH.exists():
+        return
 
-    Args:
-        task_description: English description of the current task, e.g.
-            "create invoice with payment", "voucher posting", "travel expense".
+    with open(TRACE_PATH) as f:
+        traces = json.load(f)
 
-    Returns:
-        Past experiences with what worked (200 OK) and what failed (errors).
-    """
+    docs = []
+    texts = []
+    for t in traces:
+        prompt = t.get("task_prompt", "")
+        if not prompt:
+            continue
+        endpoints = " ".join(t.get("successful_endpoints", []))
+        failed = " ".join(fe.get("endpoint", "") for fe in t.get("failed_endpoints", []))
+        text = f"{prompt} {endpoints} {failed}"[:500]
+        docs.append(t)
+        texts.append(text)
+
+    if not texts:
+        return
+
+    # Embed in batches
+    all_embs = []
+    for i in range(0, len(texts), 8):
+        batch = [t[:2000] for t in texts[i:i + 8]]
+        try:
+            resp = requests.post(f"{TEI_URL}/embed", json={"inputs": batch}, timeout=10)
+            resp.raise_for_status()
+            all_embs.append(np.array(resp.json()))
+        except Exception:
+            return
+
+    _trace_embeddings = np.vstack(all_embs)
+    _trace_docs = docs
+    logger.info("Built semantic index for %d traces", len(docs))
+
+
+def _semantic_search(query: str, top_k: int = 5) -> list[tuple[dict, float]]:
+    """Search traces by semantic similarity."""
+    _build_semantic_index()
+    if _trace_embeddings is None or _trace_docs is None:
+        return []
+
+    try:
+        resp = requests.post(f"{TEI_URL}/embed", json={"inputs": [query[:2000]]}, timeout=10)
+        resp.raise_for_status()
+        query_emb = np.array(resp.json()[0])
+    except Exception:
+        return []
+
+    norms = np.linalg.norm(_trace_embeddings, axis=1) * np.linalg.norm(query_emb)
+    norms = np.where(norms == 0, 1, norms)
+    similarities = np.dot(_trace_embeddings, query_emb) / norms
+
+    top_indices = np.argsort(similarities)[-top_k:][::-1]
+    return [((_trace_docs[i], float(similarities[i]))) for i in top_indices]
+
+
+def _bm25_search(query: str, top_k: int = 5) -> list[dict]:
+    """Search traces via Elasticsearch BM25."""
     try:
         es = Elasticsearch(ES_URL)
         if not es.indices.exists(index=INDEX):
-            return "No past experience available yet."
+            return []
     except Exception:
-        return "Experience search unavailable (Elasticsearch not running)."
+        return []
 
-    # Multi-match across all searchable fields, sorted by relevance
     results = es.search(
         index=INDEX,
         body={
-            "size": 5,
+            "size": top_k,
             "query": {
                 "multi_match": {
-                    "query": task_description,
-                    "fields": [
-                        "task_prompt^2",
-                        "tool_summary^3",
-                        "failed_endpoints_text^2",
-                        "successful_endpoints^2",
-                    ],
+                    "query": query,
+                    "fields": ["task_prompt^2", "tool_summary^3", "successful_endpoints^2"],
                     "type": "most_fields",
                     "fuzziness": "AUTO",
                 }
             },
         },
     )
+    return [hit["_source"] for hit in results.get("hits", {}).get("hits", [])]
 
-    hits = results.get("hits", {}).get("hits", [])
-    if not hits:
+
+def _format_trace(t: dict) -> str:
+    """Format a trace for the agent."""
+    errors = t.get("total_errors", 0)
+    prompt = t.get("task_prompt", "")[:150]
+    tool_summary = t.get("tool_summary", "")
+
+    success_lines = [l for l in tool_summary.split("\n") if " OK " in l and "tripletex_" in l]
+    failed_lines = [l for l in tool_summary.split("\n") if " ERR " in l]
+    failed_text = t.get("failed_endpoints_text", "")
+
+    entry = f"### Past task (errors: {errors})\n"
+    entry += f"Task: {prompt}\n"
+    if success_lines:
+        entry += f"Worked: {'; '.join(success_lines[:5])}\n"
+    if failed_lines:
+        entry += f"Failed: {'; '.join(failed_lines[:3])}\n"
+    if failed_text:
+        entry += f"Error details: {failed_text[:200]}\n"
+    return entry
+
+
+@tool
+def search_past_experience(task_description: str) -> str:
+    """Search past task executions to learn what worked and what failed.
+
+    Uses hybrid BM25 + semantic search. Works with any language.
+
+    Args:
+        task_description: Description of the task in any language.
+
+    Returns:
+        Past experiences with what worked (200 OK) and what failed (errors).
+    """
+    # Hybrid: BM25 + semantic, deduplicate by trace_id
+    seen = set()
+    results = []
+
+    # BM25 from Elasticsearch
+    for t in _bm25_search(task_description, top_k=5):
+        tid = t.get("trace_id", "")
+        if tid not in seen:
+            seen.add(tid)
+            results.append(t)
+
+    # Semantic from TEI
+    for t, score in _semantic_search(task_description, top_k=5):
+        tid = t.get("trace_id", "")
+        if tid not in seen and score > 0.3:
+            seen.add(tid)
+            results.append(t)
+
+    if not results:
         return f"No past experience found for '{task_description}'."
 
-    output = []
-    for hit in hits[:3]:
-        src = hit["_source"]
-        errors = src.get("total_errors", 0)
-        success_endpoints = src.get("successful_endpoints", [])
-        failed_text = src.get("failed_endpoints_text", "")
-        prompt = src.get("task_prompt", "")[:200]
-        tool_summary = src.get("tool_summary", "")
+    # Sort: fewer errors first, then by total tools (simpler = better)
+    results.sort(key=lambda x: (x.get("total_errors", 99), x.get("total_tool_calls", 99)))
 
-        # Extract successful patterns
-        success_lines = [
-            line for line in tool_summary.split("\n")
-            if " OK " in line and "tripletex_" in line
-        ]
-        # Extract failed patterns
-        failed_lines = [
-            line for line in tool_summary.split("\n")
-            if " ERR " in line
-        ]
-
-        entry = f"### Past task (errors: {errors})\n"
-        entry += f"Task: {prompt}\n"
-        if success_lines:
-            entry += f"Worked: {'; '.join(success_lines[:5])}\n"
-        if failed_lines:
-            entry += f"Failed: {'; '.join(failed_lines[:3])}\n"
-        if failed_text:
-            entry += f"Error details: {failed_text[:200]}\n"
-
-        output.append(entry)
-
+    output = [_format_trace(t) for t in results[:3]]
     return "\n---\n".join(output)
