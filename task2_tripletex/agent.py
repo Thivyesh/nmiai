@@ -296,6 +296,7 @@ class TripletexAgent:
         """Use the researcher to investigate the task and gather context."""
         # Pre-fetch reference data deterministically
         ref_data = self._prefetch_reference_data()
+        logger.info("Pre-fetched reference data:\n%s", ref_data)
 
         content_parts = [
             {"type": "text", "text": f"## Task Prompt\n\n{request.prompt}"},
