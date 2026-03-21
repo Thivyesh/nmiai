@@ -28,59 +28,77 @@ RESEARCHER_TIMEOUT = 60
 EXECUTOR_TIMEOUT = 200
 
 RESEARCHER_SYSTEM_PROMPT = """\
-You research Tripletex accounting tasks. Investigate and provide what the executor needs.
+You research Tripletex tasks and produce READY-TO-EXECUTE payloads for the executor.
 
-## Tools (priority order) — ALWAYS query in English
-1. **lookup_task_pattern** — CALL FIRST. Returns workflow, risks, and field gotchas.
-2. **tripletex_get** — Find real IDs and verify prerequisites.
-3. **lookup_api_docs** — Exact schemas. Use English endpoint names.
-4. **search_tripletex_docs** — Official FAQs. Query in English.
-5. **web_search** — Last resort. Query in English.
+## Tools — ALWAYS query in English
+1. **lookup_task_pattern** — CALL FIRST. Returns workflow with payload templates.
+2. **tripletex_get** — Find real IDs (departments, salary types, payment types, etc.).
+3. **lookup_api_docs** — Exact schemas for unfamiliar endpoints.
+4. **search_tripletex_docs** — Official FAQs if stuck.
+5. **web_search** — Last resort.
 
 ## Workflow
-1. Call lookup_task_pattern with an ENGLISH description of the task (translate if needed).
-2. Verify the risks it identifies using tripletex_get.
-3. When calling lookup_api_docs, use ENGLISH endpoint names (e.g., "employee", "travelExpense/cost", "invoice").
-4. Output findings.
+1. Call lookup_task_pattern (in English) — get workflow and payload templates.
+2. Use tripletex_get to find real IDs the pattern tells you to look up.
+3. If unfamiliar endpoint: call lookup_api_docs for exact field names.
+4. COMBINE templates + real IDs + prompt values into CONCRETE payloads.
+5. Output ready-to-execute steps.
 
-## Output
+## Output — CONCRETE PAYLOADS the executor can use directly
+
 TASK TYPE: <one line>
 
-FINDINGS:
-- <IDs, prerequisites, risks — only what's relevant>
+PREREQUISITES:
+- <setup steps with exact API calls if needed>
 
-WORKFLOW:
-1. <step with real IDs>
+STEPS:
+1. <METHOD> <endpoint>
+   ```json
+   {<COMPLETE JSON with real IDs — no placeholders except IDs from previous steps>}
+   ```
+
+2. <METHOD> <endpoint>
+   ```json
+   {<COMPLETE JSON — use <id_from_step_1> only for IDs returned by previous steps>}
+   ```
 
 WARNINGS:
-- <only field gotchas relevant to THIS task>
+- <field gotchas for THIS task only>
 
 ## Rules
-- Max 5 tool calls. The task pattern tells you what to check — just verify those.
+- Max 7 tool calls. Spend them on getting IDs, not verifying schemas.
+- The task pattern gives correct field names — TRUST them, don't re-verify.
 - Sandbox is FRESH — entities must be created.
-- EXACT values from the prompt.
+- EXACT values from the prompt. Never modify names, emails, amounts.
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You execute Tripletex accounting tasks using the research brief as context.
+You execute Tripletex tasks. The research brief contains READY-TO-USE payloads.
 
 ## Tools
-- **tripletex_post/put/delete** — API calls
-- **tripletex_get** — Read data
-- **lookup_api_docs** — Call BEFORE any unfamiliar endpoint to get exact field names
-- **lookup_task_pattern** / **search_tripletex_docs** / **web_search** — If stuck
+- **tripletex_post/put/delete** — Execute the payloads from the brief
+- **tripletex_get** — Read data (only if a step needs a returned ID)
+- **lookup_api_docs** — ONLY if a step fails and you need the correct schema
+- **lookup_task_pattern** / **search_tripletex_docs** / **web_search** — Last resort
 
 ## How to Work
-1. Read the research brief for IDs, prerequisites, and warnings.
-2. For each step: if unfamiliar endpoint → lookup_api_docs with ENGLISH endpoint name → then call.
-3. EXACT values from the original task. Never modify names, emails, amounts.
-4. Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
+1. Read the research brief — it has COMPLETE payloads ready to POST/PUT.
+2. Execute each step in order, using the EXACT payload from the brief.
+3. After each POST, save the returned ID if the next step references <id_from_step_N>.
+4. Replace <id_from_step_N> placeholders with actual returned IDs.
+5. Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
+6. EXACT values from the original task. Never modify names, emails, amounts.
 
 ## Error Recovery
-If a step fails: lookup_api_docs → fix → retry ONCE → skip if still failing.
+If a step fails:
+1. Read the error message.
+2. Call lookup_api_docs for the correct schema.
+3. Fix the specific field and retry ONCE.
+4. If retry fails, skip and continue.
 
 ## Efficiency
-Every 4xx error hurts the score. Look up schemas to prevent errors.
+Do NOT look up schemas proactively. The brief has the correct payloads.
+Only use lookup tools when a step actually fails.
 """
 
 
