@@ -401,7 +401,7 @@ Keywords: lønn, salary, payroll, Gehalt, salario, salaire, lønnskjøring, kjø
 | Department ID | GET /department?fields=id&count=1 | Needed for employee |
 | Division exists? | GET /division?fields=id&count=1 | Employment MUST have division for salary |
 | Municipality ID | GET /municipality?fields=id,name&count=5 | Needed if creating division |
-| Company org number | GET /company/{companyId}?fields=organizationNumber | Division needs DIFFERENT org number |
+| Company info | GET /token/session/>whoAmI?fields=companyId then GET /company/{id}?fields=organizationNumber | Division needs DIFFERENT org number. Or just use "999999999" as org number. |
 | Salary types | GET /salary/type?fields=id,number,name | Need IDs for salary specifications |
 
 ### Verified Workflow
@@ -409,9 +409,16 @@ Keywords: lønn, salary, payroll, Gehalt, salario, salaire, lønnskjøring, kjø
    - userType REQUIRED for salary employees — use "STANDARD"
    - dateOfBirth REQUIRED for employment creation
 2. GET /division — check if division exists
-3. If no division: POST /division — {name: "Hovedvirksomhet", startDate: "YYYY-01-01", organizationNumber: "<DIFFERENT from company>", municipality: {"id": N}}
-   - organizationNumber MUST be different from the company's org number
-   - Get a municipality ID via GET /municipality
+3. If no division: Create one:
+   a. GET /municipality?fields=id,name&count=1 → get any municipality ID
+   b. POST /division:
+      {name: "Hovedvirksomhet", startDate: "2026-01-01",
+       organizationNumber: "999999999",
+       municipality: {"id": N},
+       municipalityDate: "2026-01-01"}
+   - organizationNumber MUST be different from company's — use any 9-digit number
+   - municipalityDate is REQUIRED (use same as startDate)
+   - municipality is REQUIRED — get ID via GET /municipality
 4. POST /employee/employment — {employee: {"id": N}, startDate: "YYYY-MM-DD", isMainEmployer: true, division: {"id": N}}
    - Division is REQUIRED — "Arbeidsforholdet er ikke knyttet mot en virksomhet" without it
 5. GET /salary/type — find salary type IDs:
