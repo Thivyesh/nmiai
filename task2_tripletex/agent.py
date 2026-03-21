@@ -106,13 +106,12 @@ class TripletexAgent:
     _lock = asyncio.Lock()
 
     def __init__(self):
-        # Single agent: Opus does everything
-        self.agent_llm = ChatAnthropic(
-            model="claude-opus-4-20250514",
-            max_tokens=4096,
+        # Single agent: Gemini Pro
+        self.agent_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro",
             temperature=0,
             max_retries=2,
-            timeout=60.0,
+            timeout=60,
         )
         self.fallback_llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",

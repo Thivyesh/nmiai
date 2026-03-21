@@ -7,6 +7,11 @@ doesn't miss fields like phone, address, occupation code, etc.
 import base64
 import logging
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
@@ -70,12 +75,13 @@ async def extract_file_data(files: list) -> str:
     if not files:
         return ""
 
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
+    # Use Gemini Flash for extraction — no Anthropic credit dependency
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
         temperature=0,
         max_retries=2,
-        timeout=30.0,
+        timeout=30,
     )
 
     content_parts = [{"type": "text", "text": EXTRACTION_PROMPT}]
