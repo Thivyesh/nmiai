@@ -9,3 +9,9 @@ search_index.npz
 pattern_index.npz
 devdocs_index.npz
 developer_docs.json
+
+# Object detection outputs
+task1_object_detection/output/
+task1_object_detection/analysis_plots/
+mlruns/
+mlartifacts/
