@@ -12,10 +12,13 @@ TASK_PATTERNS = """\
 # RESEARCHER CHECKLIST — Tripletex Competition
 
 ## UNIVERSAL PREREQUISITES (check for EVERY task)
-- Sandbox is ALWAYS FRESH — no customers, products, employees, suppliers exist
-- NEVER search for existing entities — they DO NOT EXIST. Always CREATE them.
-- The only pre-existing data: departments, ledger accounts, VAT types, payment types, salary types
-- Every entity mentioned in the prompt must be CREATED as a separate record
+- Sandbox starts FRESH but some tasks have PRE-LOADED data (customers, invoices, etc.)
+- Read the prompt carefully to determine CREATE vs FIND:
+  - "Create/opprett/crie" → CREATE the entity
+  - "has an invoice / outstanding / existing" → FIND it first, it was pre-loaded
+  - If FIND fails → fallback to CREATE
+- The always pre-existing data: departments, ledger accounts, VAT types, payment types, salary types
+- Every entity mentioned in the prompt must EXIST (created or found) as a separate record
 - Every field value in the prompt WILL be checked field-by-field
 - Use EXACT values from prompt — never modify names, emails, amounts
 
