@@ -272,17 +272,21 @@ Keywords: betaling, payment, Zahlung, pago, paiement, pagamento, registrer betal
 ### Prerequisites (MUST check)
 | Check | How | Why |
 |-------|-----|-----|
-| Invoice ID | GET /invoice with date filters (invoiceDateFrom, invoiceDateTo REQUIRED) | Need the exact invoice |
+| Invoice ID | GET /invoice with date filters | Need the exact invoice |
 | Payment type | GET /invoice/paymentType | Need paymentTypeId |
+| Bank account | GET /ledger/account?number=1920&fields=id,version,bankAccountNumber | Invoice needs bank account |
 
 ### Verified Workflow
-1. GET /invoice?invoiceDateFrom=YYYY-01-01&invoiceDateTo=YYYY-12-31&customerId=N — find the invoice
+1. GET /invoice?invoiceDateFrom=YYYY-01-01&invoiceDateTo=YYYY-12-31&customerId=N&fields=id,invoiceNumber,amount,amountOutstanding,comment
 2. GET /invoice/paymentType — find paymentTypeId
 3. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=N
 
 ### Verified Field Gotchas
-- ALL params are query params, NOT body. Pass body="{}"
+- ALL payment params are query params, NOT body. Pass body="{}"
 - GET /invoice REQUIRES invoiceDateFrom AND invoiceDateTo — will fail without them
+- Invoice valid fields: id, invoiceNumber, amount, amountOutstanding, amountCurrency, comment, invoiceDate, invoiceDueDate, isCreditNote
+- Invoice does NOT have: "description" (use "comment"), "amountPaid" (use "amountOutstanding"), "amountExcludingVat" fails in fields
+- Account path: ALWAYS /ledger/account — NOT /account or /bank
 - paidAmount must match invoice amount for full payment
 
 ---
@@ -293,24 +297,34 @@ Keywords: tilbakeføring, stornering, reversering, zurückgebucht, stornieren, r
 ### Prerequisites (MUST check)
 | Check | How | Why |
 |-------|-----|-----|
-| Invoice ID | GET /invoice with date filters | Need the invoice that was paid |
+| Customer ID | GET /customer?organizationNumber=N or ?name=X | Need customer to find invoice |
+| Invoice ID | GET /invoice?invoiceDateFrom=YYYY-01-01&invoiceDateTo=YYYY-12-31&customerId=N&fields=id,amount,amountOutstanding,comment | Find the paid invoice |
 | Payment type | GET /invoice/paymentType | Need paymentTypeId |
-| Invoice amount | From GET /invoice response | Need exact amount for negative payment |
+| Bank account | GET /ledger/account?number=1920&fields=id,version,bankAccountNumber | May need to set bank account |
 
-### Verified Workflow (negative payment method)
-1. GET /invoice?invoiceDateFrom=YYYY-01-01&invoiceDateTo=YYYY-12-31&customerId=N — find the paid invoice
-2. GET /invoice/paymentType — find paymentTypeId
-3. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=-AMOUNT (NEGATIVE amount reverses payment)
+### IMPORTANT: Fresh sandbox has NO invoices
+On a fresh competition sandbox, the invoice doesn't exist yet. You must:
+1. Create the customer
+2. Check/set bank account on ledger account 1920
+3. Create the invoice (order → invoice)
+4. Register the payment
+5. Then reverse the payment with negative amount
 
-### Alternative: Voucher reversal method
-If the invoice has a voucher, you can reverse it:
-1. GET /invoice/{id}?fields=voucher — get the voucher ID
-2. PUT /ledger/voucher/{voucherId}/:reverse — reverses the voucher
+### Verified Workflow
+1. POST /customer — create the customer
+2. GET /ledger/account?number=1920&fields=id,version,bankAccountNumber — check bank account
+3. If empty: PUT /ledger/account/{id} with bankAccountNumber
+4. POST /order → POST /invoice — create the original invoice
+5. GET /invoice/paymentType — find paymentTypeId
+6. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=AMOUNT — register original payment
+7. PUT /invoice/{id}/:payment?paymentDate=X&paymentTypeId=N&paidAmount=-AMOUNT — reverse with NEGATIVE amount
 
 ### Verified Field Gotchas
-- Use NEGATIVE paidAmount to reverse a payment (e.g., paidAmount=-55375)
-- ALL params are query params, NOT body
-- The invoice must already have a payment registered to reverse it
+- Use NEGATIVE paidAmount to reverse (e.g., paidAmount=-53125)
+- ALL payment params are query params, NOT body. Pass body="{}"
+- Account path: /ledger/account NOT /account or /bank
+- Invoice fields: use "comment" NOT "description", no "amountPaid" field
+- GET /invoice REQUIRES invoiceDateFrom AND invoiceDateTo
 - After reversal, invoice amountOutstanding should equal the original amount
 
 ---

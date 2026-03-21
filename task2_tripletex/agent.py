@@ -61,6 +61,12 @@ FINDINGS:
 - Existing entities found: <IDs>
 - Prerequisites: <what needs to be created/set up first>
 
+COMMON MISTAKES TO AVOID:
+- Account path is /ledger/account NOT /account or /bank
+- Invoice "description" field doesn't exist — use "comment"
+- Invoice has no "amountPaid" field — use "amountOutstanding"
+- GET /invoice REQUIRES invoiceDateFrom AND invoiceDateTo
+
 RISKS & WARNINGS:
 - <specific things the executor must watch out for>
 - <field name gotchas, required fields, etc.>
