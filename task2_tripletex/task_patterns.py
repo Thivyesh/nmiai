@@ -398,64 +398,59 @@ Keywords: lønn, salary, payroll, Gehalt, salario, salaire, lønnskjøring, kjø
 | Check | How | Why |
 |-------|-----|-----|
 | Employee exists? | GET /employee?email=X | Must exist with employment record |
-| Employee has employment? | GET /employee/employment?employeeId=N | Salary requires active employment |
-| Department ID | GET /department?fields=id&count=1 | Needed for employee creation |
+| Department ID | GET /department?fields=id&count=1 | Needed for employee |
+| Division exists? | GET /division?fields=id&count=1 | Employment MUST have division for salary |
+| Municipality ID | GET /municipality?fields=id,name&count=5 | Needed if creating division |
+| Company org number | GET /company/{companyId}?fields=organizationNumber | Division needs DIFFERENT org number |
 | Salary types | GET /salary/type?fields=id,number,name | Need IDs for salary specifications |
 
 ### Verified Workflow
-1. POST /employee (if needed) with department
-2. POST /employee/employment — {employee: {"id": N}, startDate: "YYYY-MM-DD", isMainEmployer: true}
-   - Employee MUST have an employment record before salary can be processed
-3. GET /salary/type — find salary type IDs:
-   - num=2000 "Fastlønn" (base salary/monthly)
-   - num=2001 "Timelønn" (hourly wage)
-   - num=2002 "Bonus" (bonus)
-   - num=2005 "Overtidsgodtgjørelse" (overtime)
-4. POST /salary/transaction — create the salary run:
+1. POST /employee — {firstName, lastName, email, department: {"id": N}, userType: "STANDARD", dateOfBirth: "YYYY-MM-DD"}
+   - userType REQUIRED for salary employees — use "STANDARD"
+   - dateOfBirth REQUIRED for employment creation
+2. GET /division — check if division exists
+3. If no division: POST /division — {name: "Hovedvirksomhet", startDate: "YYYY-01-01", organizationNumber: "<DIFFERENT from company>", municipality: {"id": N}}
+   - organizationNumber MUST be different from the company's org number
+   - Get a municipality ID via GET /municipality
+4. POST /employee/employment — {employee: {"id": N}, startDate: "YYYY-MM-DD", isMainEmployer: true, division: {"id": N}}
+   - Division is REQUIRED — "Arbeidsforholdet er ikke knyttet mot en virksomhet" without it
+5. GET /salary/type — find salary type IDs:
+   - num=2000 "Fastlønn" (base salary)
+   - num=2002 "Bonus"
+   - num=2001 "Timelønn" (hourly)
+6. POST /salary/transaction:
 ```
 {
   "date": "YYYY-MM-DD",
   "year": 2026,
   "month": 3,
   "isHistorical": false,
-  "payslips": [
-    {
-      "employee": {"id": N},
-      "date": "YYYY-MM-DD",
-      "year": 2026,
-      "month": 3,
-      "specifications": [
-        {
-          "salaryType": {"id": <fastlonn_id>},
-          "rate": 53350,
-          "count": 1,
-          "amount": 53350
-        },
-        {
-          "salaryType": {"id": <bonus_id>},
-          "rate": 11050,
-          "count": 1,
-          "amount": 11050
-        }
-      ]
-    }
-  ]
+  "payslips": [{
+    "employee": {"id": N},
+    "date": "YYYY-MM-DD",
+    "year": 2026,
+    "month": 3,
+    "specifications": [
+      {"salaryType": {"id": <fastlonn_id>}, "rate": 53350, "count": 1, "amount": 53350},
+      {"salaryType": {"id": <bonus_id>}, "rate": 11050, "count": 1, "amount": 11050}
+    ]
+  }]
 }
 ```
 
 ### Fallback: Manual voucher if salary API fails
-The task may say "if salary API unavailable, register as manual voucher":
-1. GET /ledger/account?number=5000&fields=id (salary expense account)
-2. GET /ledger/account?number=2930&fields=id (salary payable account)
-3. POST /ledger/voucher?sendToLedger=true with postings:
-   - Debit salary account (amountGross: +total)
-   - Credit payable account (amountGross: -total)
+1. GET /ledger/account?number=5000&fields=id (salary expense)
+2. GET /ledger/account?number=2930&fields=id (salary payable)
+3. POST /ledger/voucher?sendToLedger=true with balanced postings
 
 ### Verified Field Gotchas
-- Employee MUST have an employment record — "Ansatt er ikke registrert med et arbeidsforhold"
+- Division is REQUIRED on employment for salary — create one if none exists
+- Division organizationNumber must be DIFFERENT from company org number
+- userType: "STANDARD" required on employee for salary (not NO_ACCESS)
+- dateOfBirth required on employee before employment can be created
+- year MUST be current year (2026) — past years fail with "Ugyldig år"
 - Specification requires: salaryType, rate, count (rate cannot be null)
 - amount = rate × count
-- year and month must match the payroll period
 - Salary type IDs vary per sandbox — always GET /salary/type first
 
 ---
