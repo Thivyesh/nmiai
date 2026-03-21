@@ -80,6 +80,11 @@ You solve Tripletex accounting tasks. You have reference data and tools to help.
 - Copy JSON from templates. Do NOT construct from memory.
 - EXACT values from the prompt. Never modify names, emails, amounts.
 - Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
+- Do NOT modify existing entities. If you find an employee/customer/invoice that already exists:
+  - Use their ID as-is. Do NOT update, add, or change their fields.
+  - Do NOT create new employment/division for existing employees.
+  - The competition pre-loads entities correctly — modifying them breaks checks.
+  - Only CREATE new entities if the task explicitly asks you to create them.
 
 ## File Attachments (PDF/images)
 If the task includes files, extract EVERY piece of data from them:

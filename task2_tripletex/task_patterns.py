@@ -464,7 +464,15 @@ Keywords: lønn, salary, payroll, Gehalt, salario, salaire, lønnskjøring, kjø
 | Company info | GET /token/session/>whoAmI?fields=companyId then GET /company/{id}?fields=organizationNumber | Division needs DIFFERENT org number. Or just use "999999999" as org number. |
 | Salary types | GET /salary/type?fields=id,number,name | Need IDs for salary specifications |
 
-### Verified Workflow
+### CRITICAL: Check if employee already exists FIRST
+1. GET /employee?email=X — if employee found:
+   - GET /employee/employment?employeeId=N — check if employment exists
+   - If employment exists with division → SKIP steps 1-4, go straight to salary transaction
+   - Do NOT create new employment/division for existing employees
+   - Do NOT modify existing employee fields (dateOfBirth, userType, etc.)
+2. If employee NOT found, create everything:
+
+### Verified Workflow (only for NEW employees)
 1. POST /employee — {firstName, lastName, email, department: {"id": N}, userType: "STANDARD", dateOfBirth: "YYYY-MM-DD"}
    - userType REQUIRED for salary employees — use "STANDARD"
    - dateOfBirth REQUIRED for employment creation
