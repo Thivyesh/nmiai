@@ -18,6 +18,7 @@ from task2_tripletex.tools import (
     EXECUTOR_TOOLS,
     PLANNER_TOOLS,
     TripletexClient,
+    _get_client,
     set_client,
 )
 
@@ -224,9 +225,82 @@ class TripletexAgent:
                     raise e
             raise
 
+    def _prefetch_reference_data(self) -> str:
+        """Pre-fetch common reference data deterministically. No LLM involved."""
+        client = _get_client()
+        data = {}
+
+        # Department
+        try:
+            r = client.get("/department", {"fields": "id,name", "count": "1"})
+            vals = r.get("values", [])
+            if vals:
+                data["department_id"] = vals[0]["id"]
+                data["department_name"] = vals[0].get("name", "")
+        except Exception:
+            pass
+
+        # Bank account (1920)
+        try:
+            r = client.get("/ledger/account", {"number": "1920", "fields": "id,version,bankAccountNumber"})
+            vals = r.get("values", [])
+            if vals:
+                data["account_1920_id"] = vals[0]["id"]
+                data["account_1920_version"] = vals[0].get("version", 0)
+                data["account_1920_bank"] = vals[0].get("bankAccountNumber", "")
+        except Exception:
+            pass
+
+        # Cash account (1900)
+        try:
+            r = client.get("/ledger/account", {"number": "1900", "fields": "id"})
+            vals = r.get("values", [])
+            if vals:
+                data["account_1900_id"] = vals[0]["id"]
+        except Exception:
+            pass
+
+        # Invoice payment types
+        try:
+            r = client.get("/invoice/paymentType", {"fields": "id,description"})
+            vals = r.get("values", [])
+            if vals:
+                data["invoice_payment_types"] = [{"id": v["id"], "desc": v.get("description", "")} for v in vals[:3]]
+        except Exception:
+            pass
+
+        # Travel expense payment types
+        try:
+            r = client.get("/travelExpense/paymentType", {"fields": "id,description"})
+            vals = r.get("values", [])
+            if vals:
+                data["travel_payment_types"] = [{"id": v["id"], "desc": v.get("description", "")} for v in vals[:3]]
+        except Exception:
+            pass
+
+        # Voucher types
+        try:
+            r = client.get("/ledger/voucherType", {"fields": "id,name", "count": "5"})
+            vals = r.get("values", [])
+            if vals:
+                data["voucher_types"] = [{"id": v["id"], "name": v.get("name", "")} for v in vals[:5]]
+        except Exception:
+            pass
+
+        lines = ["## Pre-fetched Reference Data (verified IDs from this sandbox)"]
+        for k, v in data.items():
+            lines.append(f"- {k}: {v}")
+        return "\n".join(lines)
+
     async def _research(self, request: SolveRequest, config: dict) -> str:
         """Use the researcher to investigate the task and gather context."""
-        content_parts = [{"type": "text", "text": f"## Task Prompt\n\n{request.prompt}"}]
+        # Pre-fetch reference data deterministically
+        ref_data = self._prefetch_reference_data()
+
+        content_parts = [
+            {"type": "text", "text": f"## Task Prompt\n\n{request.prompt}"},
+            {"type": "text", "text": f"\n{ref_data}"},
+        ]
         if request.files:
             content_parts.append({"type": "text", "text": "\n## Attached Files\n"})
             content_parts.extend(self._extract_file_content(request))
