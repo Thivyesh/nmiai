@@ -391,6 +391,75 @@ POST /incomingInvoice?sendTo=ledger
 
 ---
 
+## SALARY / PAYROLL TASKS
+Keywords: lønn, salary, payroll, Gehalt, salario, salaire, lønnskjøring, kjør lønn
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Employee exists? | GET /employee?email=X | Must exist with employment record |
+| Employee has employment? | GET /employee/employment?employeeId=N | Salary requires active employment |
+| Department ID | GET /department?fields=id&count=1 | Needed for employee creation |
+| Salary types | GET /salary/type?fields=id,number,name | Need IDs for salary specifications |
+
+### Verified Workflow
+1. POST /employee (if needed) with department
+2. POST /employee/employment — {employee: {"id": N}, startDate: "YYYY-MM-DD", isMainEmployer: true}
+   - Employee MUST have an employment record before salary can be processed
+3. GET /salary/type — find salary type IDs:
+   - num=2000 "Fastlønn" (base salary/monthly)
+   - num=2001 "Timelønn" (hourly wage)
+   - num=2002 "Bonus" (bonus)
+   - num=2005 "Overtidsgodtgjørelse" (overtime)
+4. POST /salary/transaction — create the salary run:
+```
+{
+  "date": "YYYY-MM-DD",
+  "year": 2026,
+  "month": 3,
+  "isHistorical": false,
+  "payslips": [
+    {
+      "employee": {"id": N},
+      "date": "YYYY-MM-DD",
+      "year": 2026,
+      "month": 3,
+      "specifications": [
+        {
+          "salaryType": {"id": <fastlonn_id>},
+          "rate": 53350,
+          "count": 1,
+          "amount": 53350
+        },
+        {
+          "salaryType": {"id": <bonus_id>},
+          "rate": 11050,
+          "count": 1,
+          "amount": 11050
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Fallback: Manual voucher if salary API fails
+The task may say "if salary API unavailable, register as manual voucher":
+1. GET /ledger/account?number=5000&fields=id (salary expense account)
+2. GET /ledger/account?number=2930&fields=id (salary payable account)
+3. POST /ledger/voucher?sendToLedger=true with postings:
+   - Debit salary account (amountGross: +total)
+   - Credit payable account (amountGross: -total)
+
+### Verified Field Gotchas
+- Employee MUST have an employment record — "Ansatt er ikke registrert med et arbeidsforhold"
+- Specification requires: salaryType, rate, count (rate cannot be null)
+- amount = rate × count
+- year and month must match the payroll period
+- Salary type IDs vary per sandbox — always GET /salary/type first
+
+---
+
 ## MULTILINGUAL FIELD REFERENCE
 | Prompt term | API field | Entity |
 |-------------|-----------|--------|
