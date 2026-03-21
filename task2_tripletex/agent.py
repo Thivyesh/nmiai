@@ -25,7 +25,7 @@ from task2_tripletex.tools import (
 logger = logging.getLogger(__name__)
 
 TOTAL_TIMEOUT = 270
-RESEARCHER_TIMEOUT = 60
+RESEARCHER_TIMEOUT = 45
 EXECUTOR_TIMEOUT = 200
 
 RESEARCHER_SYSTEM_PROMPT = """\
@@ -261,7 +261,8 @@ class TripletexAgent:
             content_parts.extend(self._extract_file_content(request))
 
         messages = {"messages": [HumanMessage(content=content_parts)]}
-        research_config = {**config, "recursion_limit": 25}
+        # Low limit — if researcher can't figure it out in 12 iterations, let Opus handle it
+        research_config = {**config, "recursion_limit": 12}
 
         result = await asyncio.wait_for(
             self._run_with_fallback(
@@ -300,15 +301,18 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
+        # Pre-fetch reference data (always available, even if researcher fails)
+        ref_data = self._prefetch_reference_data()
+
         # Step 1: Research
         try:
             brief = await self._research(request, config)
         except asyncio.TimeoutError:
             logger.warning("Researcher timed out after %ds", RESEARCHER_TIMEOUT)
-            brief = "Research timed out. Execute based on the task prompt alone."
+            brief = f"Research timed out. This may be a complex/unknown task. Use your tools (get_task_workflow, get_payload_template, tripletex_get) to explore and figure it out.\n\n{ref_data}"
         except Exception as e:
             logger.exception("Researcher failed: %s", e)
-            brief = f"Research failed: {e}. Execute based on the task prompt alone."
+            brief = f"Research failed. This may be a complex/unknown task. Use your tools (get_task_workflow, get_payload_template, tripletex_get) to explore and figure it out.\n\n{ref_data}"
 
         # Check remaining time
         elapsed = time.time() - start_time
