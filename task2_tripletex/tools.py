@@ -142,5 +142,5 @@ from task2_tripletex.web_search_tool import web_search
 # Researcher: task patterns + API reference data + docs for discovery
 PLANNER_TOOLS = [lookup_task_pattern, tripletex_get, lookup_api_docs, search_tripletex_docs, web_search]
 
-# Executor: write tools + API docs for error recovery only
-EXECUTOR_TOOLS = [tripletex_post, tripletex_put, tripletex_delete, tripletex_get, lookup_api_docs]
+# Executor: write tools + API docs and task patterns for error recovery
+EXECUTOR_TOOLS = [tripletex_post, tripletex_put, tripletex_delete, tripletex_get, lookup_api_docs, lookup_task_pattern]
