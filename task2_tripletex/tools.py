@@ -143,5 +143,5 @@ from task2_tripletex.workflow_tools import get_payload_template, get_task_workfl
 # Researcher: workflow + payload templates + API reference
 PLANNER_TOOLS = [get_task_workflow, get_payload_template, tripletex_get, lookup_api_docs, search_tripletex_docs, web_search]
 
-# Executor: write tools + payload templates for error recovery
-EXECUTOR_TOOLS = [tripletex_post, tripletex_put, tripletex_delete, tripletex_get, get_payload_template, lookup_api_docs]
+# Executor: write tools + templates for self-correction
+EXECUTOR_TOOLS = [tripletex_post, tripletex_put, tripletex_delete, tripletex_get, get_payload_template, lookup_api_docs, get_task_workflow]

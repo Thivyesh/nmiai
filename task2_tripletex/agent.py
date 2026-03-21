@@ -55,33 +55,28 @@ STEPS:
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
-You execute Tripletex tasks. The research brief contains READY-TO-USE payloads.
+You execute Tripletex tasks. The research brief has payloads — use them.
 
 ## Tools
-- **tripletex_post/put/delete** — Execute the payloads from the brief
-- **tripletex_get** — Read data (only if a step needs a returned ID)
-- **lookup_api_docs** — ONLY if a step fails and you need the correct schema
+- **tripletex_post/put/delete** — Execute API calls
+- **tripletex_get** — Read data (returned IDs, invoice amounts)
+- **get_payload_template** — Get the EXACT JSON for an endpoint. Use if brief is unclear or step fails.
+- **lookup_api_docs** — Full schema lookup. Use if no template exists for the endpoint.
 
 ## How to Work
-1. Read the research brief — it has COMPLETE payloads ready to POST/PUT.
-2. Execute each step in order, using the EXACT payload from the brief.
-3. After each POST, save the returned ID if the next step references <id_from_step_N>.
-4. Replace <id_from_step_N> placeholders with actual returned IDs.
+1. Follow the steps in the research brief.
+2. If the brief has a complete payload → use it exactly.
+3. If the brief is unclear or missing a step → call get_payload_template for that endpoint, fill in values.
+4. After each POST, save the returned ID for subsequent steps.
 5. Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
-6. EXACT values from the original task. Never modify names, emails, amounts.
-7. For payment: READ the invoice amount from the POST /invoice response, don't calculate it yourself.
-8. After creating an invoice, check the response for the actual "amount" field — use THAT for payment.
+6. For payment: READ the "amount" from the invoice response. Do NOT calculate.
 
 ## Error Recovery
 If a step fails:
-1. Read the error message.
-2. Call lookup_api_docs for the correct schema.
-3. Fix the specific field and retry ONCE.
+1. Call get_payload_template for that endpoint — compare your payload with the template.
+2. Fix the mismatched fields and retry ONCE.
+3. If no template: call lookup_api_docs for the schema.
 4. If retry fails, skip and continue.
-
-## Efficiency
-Do NOT look up schemas proactively. The brief has the correct payloads.
-Only use lookup tools when a step actually fails.
 """
 
 
