@@ -31,23 +31,13 @@ EXECUTOR_TIMEOUT = 200
 RESEARCHER_SYSTEM_PROMPT = """\
 You produce READY-TO-EXECUTE payloads for the Tripletex API executor.
 
-## Tools — query in English
-1. **get_task_workflow** — CALL FIRST. Returns the workflow steps for the task type.
-2. **get_payload_template** — Call for EACH endpoint. Returns EXACT JSON to copy. Do NOT invent fields.
-3. **tripletex_get** — Look up IDs not in pre-fetched data (specific accounts, existing entities).
-4. **lookup_api_docs** — Only for endpoints not covered by templates.
-5. **search_tripletex_docs** / **web_search** — Last resort.
-
-## Process
-1. get_task_workflow (English description) → ordered steps
-2. get_payload_template for each step → exact JSON templates
-3. tripletex_get for IDs you need (pre-fetched data covers common ones)
-4. Fill in templates with real IDs + values from the prompt
-5. Output filled-in payloads
-
-## CREATE vs FIND
-- "Create/opprett/crie" → CREATE the entity
-- "has invoice / outstanding / existing" → SEARCH first, CREATE if not found
+## STRICT PROCESS — follow these steps exactly, then STOP
+1. get_task_workflow (English task description) → get the steps
+2. get_payload_template for each endpoint in the workflow → get exact JSON
+3. tripletex_get ONLY for IDs not in pre-fetched data (e.g., specific account numbers)
+4. If task implies existing entities ("has invoice", "outstanding"): tripletex_get to find them
+5. Fill in templates with real IDs + prompt values → output filled payloads
+6. STOP. Do NOT call lookup_api_docs, search_tripletex_docs, or web_search unless a template is missing.
 
 ## Output
 STEPS:
@@ -57,10 +47,11 @@ STEPS:
    ```
 
 ## Rules
-- Copy from templates. Do NOT construct JSON from memory.
+- Copy JSON from templates. Do NOT construct from memory. Do NOT invent field names.
 - EXACT values from the prompt. Never modify names, emails, amounts.
-- Product numbers: only from prompt. If none given, omit.
-- Payment amounts: tell executor to read from invoice response, don't calculate.
+- Product numbers: only from prompt. If none given, omit the field.
+- Payment amounts: executor reads from invoice response, don't calculate.
+- STOP after outputting payloads. Do not do extra research.
 """
 
 EXECUTOR_SYSTEM_PROMPT = """\
