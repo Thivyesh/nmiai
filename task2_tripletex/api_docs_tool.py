@@ -1,8 +1,4 @@
-"""Dynamic API documentation tool for the planner agent.
-
-Parses the Tripletex OpenAPI spec and provides endpoint documentation on demand.
-Supports keyword search (default) and optional semantic search via pre-built embeddings.
-"""
+"""Dynamic API documentation tool using hybrid BM25 + semantic search."""
 
 import json
 import logging
@@ -12,15 +8,28 @@ from pathlib import Path
 import numpy as np
 import requests
 from langchain_core.tools import tool
+from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger(__name__)
 
 _spec: dict | None = None
+_index: dict | None = None
+_bm25_api: BM25Okapi | None = None
+_api_entries: list[tuple[str, str, str]] | None = None  # (path, method, summary)
+
 SPEC_PATH = Path(__file__).parent / "openapi_cache.json"
 INDEX_PATH = Path(__file__).parent / "search_index.npz"
 
-# Loaded once from disk
-_index: dict | None = None
+# Well-known entity types — reference by {"id": N}, don't expand fields
+_REFERENCE_ONLY = {
+    "Customer", "Employee", "Department", "Project", "Product",
+    "Currency", "VatType", "Account", "Contact", "Supplier",
+    "Company", "Division", "Municipality", "Country",
+    "CustomerCategory", "DiscountGroup", "ProductUnit",
+    "Voucher", "Invoice", "Order", "Document",
+    "TravelExpense", "TravelPaymentType", "TravelCostCategory",
+    "OccupationCode", "Asset",
+}
 
 
 def _get_spec() -> dict:
@@ -46,9 +55,7 @@ def _load_index() -> dict:
     if _index:
         return _index
     if not INDEX_PATH.exists():
-        raise FileNotFoundError(
-            f"Search index not found at {INDEX_PATH}. Run: uv run python -m task2_tripletex.build_index"
-        )
+        raise FileNotFoundError("Search index not found. Run: uv run python -m task2_tripletex.build_index")
     data = np.load(INDEX_PATH, allow_pickle=False)
     _index = {
         "embeddings": data["embeddings"],
@@ -56,26 +63,33 @@ def _load_index() -> dict:
         "methods": data["methods"].tolist(),
         "summaries": data["summaries"].tolist(),
     }
-    logger.info("Loaded semantic index: %d endpoints", len(_index["paths"]))
     return _index
+
+
+def _get_bm25_api() -> tuple[BM25Okapi, list[tuple[str, str, str]]]:
+    """Build BM25 index over API endpoints."""
+    global _bm25_api, _api_entries
+    if _bm25_api is not None and _api_entries is not None:
+        return _bm25_api, _api_entries
+    spec = _get_spec()
+    entries = []
+    corpus = []
+    for path, methods in spec.get("paths", {}).items():
+        for method, details in methods.items():
+            if method not in ("get", "post", "put", "delete"):
+                continue
+            summary = details.get("summary", "")
+            text = f"{method} {path} {summary}".lower()
+            entries.append((path, method, summary))
+            corpus.append(text.split())
+    _bm25_api = BM25Okapi(corpus)
+    _api_entries = entries
+    return _bm25_api, entries
 
 
 def _resolve_ref(ref: str, spec: dict) -> dict:
     name = ref.split("/")[-1]
     return spec.get("components", {}).get("schemas", {}).get(name, {})
-
-
-
-# Well-known entity types — just reference by {"id": N}, don't expand fields
-_REFERENCE_ONLY_SCHEMAS = {
-    "Customer", "Employee", "Department", "Project", "Product",
-    "Currency", "VatType", "Account", "Contact", "Supplier",
-    "Company", "Division", "Municipality", "Country",
-    "CustomerCategory", "DiscountGroup", "ProductUnit",
-    "Voucher", "Invoice", "Order", "Document",
-    "TravelExpense", "TravelPaymentType", "TravelCostCategory",
-    "OccupationCode", "Asset",
-}
 
 
 def _get_schema_fields(schema: dict, spec: dict, depth: int = 0) -> list[str]:
@@ -95,11 +109,9 @@ def _get_schema_fields(schema: dict, spec: dict, depth: int = 0) -> list[str]:
         enum = prop.get("enum", [])
         if ref:
             ref_name = ref.split("/")[-1]
-            if ref_name in _REFERENCE_ONLY_SCHEMAS:
-                # Well-known entity — just reference by ID
-                typ = f"object({ref_name}) — use {{\"id\": N}}"
+            if ref_name in _REFERENCE_ONLY:
+                typ = f'object({ref_name}) — use {{"id": N}}'
             else:
-                # Unfamiliar schema — expand fields so executor can see them
                 typ = f"object({ref_name})"
                 if depth == 0:
                     sub_schema = _resolve_ref(ref, spec)
@@ -108,8 +120,8 @@ def _get_schema_fields(schema: dict, spec: dict, depth: int = 0) -> list[str]:
                         typ += "\n" + "\n".join(f"    {sf}" for sf in sub_fields)
         if prop.get("items", {}).get("$ref"):
             item_name = prop["items"]["$ref"].split("/")[-1]
-            if item_name in _REFERENCE_ONLY_SCHEMAS:
-                typ = f"array[{item_name}] — use [{{\"id\": N}}]"
+            if item_name in _REFERENCE_ONLY:
+                typ = f'array[{item_name}] — use [{{"id": N}}]'
             else:
                 typ = f"array[{item_name}]"
                 if depth == 0:
@@ -136,9 +148,7 @@ def _format_endpoint(path: str, method: str, details: dict, spec: dict) -> str:
             enum = schema.get("enum", [])
             enum_str = f" enum={enum}" if enum else ""
             desc = p.get("description", "")[:80]
-            lines.append(
-                f"  {p['name']}: {schema.get('type', '?')}{req}{enum_str} — {desc}"
-            )
+            lines.append(f"  {p['name']}: {schema.get('type', '?')}{req}{enum_str} — {desc}")
         lines.append("")
     body = details.get("requestBody", {})
     content = body.get("content", {})
@@ -155,46 +165,61 @@ def _format_endpoint(path: str, method: str, details: dict, spec: dict) -> str:
     return "\n".join(lines)
 
 
-def _semantic_search(
-    query: str, top_k: int = 10
-) -> list[tuple[str, str, str, float]]:
-    """Search endpoints by cosine similarity against pre-built index."""
-    index = _load_index()
-    embeddings = index["embeddings"]
+def _hybrid_search_api(query: str, top_k: int = 8) -> list[tuple[str, str, str, float]]:
+    """Hybrid BM25 + semantic search over API endpoints."""
+    spec = _get_spec()
+    paths = spec.get("paths", {})
 
-    # Embed query via TEI
-    tei_url = os.getenv("TEI_URL", "http://localhost:8080")
-    resp = requests.post(
-        f"{tei_url}/embed", json={"inputs": [query]}, timeout=10
-    )
-    resp.raise_for_status()
-    query_emb = np.array(resp.json()[0])
+    # BM25
+    bm25, entries = _get_bm25_api()
+    query_tokens = query.lower().split()
+    bm25_scores = bm25.get_scores(query_tokens)
+    bm25_ranking = list(np.argsort(bm25_scores)[::-1])
 
-    # Cosine similarity
-    norms = np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_emb)
-    norms = np.where(norms == 0, 1, norms)
-    similarities = np.dot(embeddings, query_emb) / norms
+    # Semantic
+    semantic_ranking = []
+    try:
+        index = _load_index()
+        tei_url = os.getenv("TEI_URL", "http://localhost:8080")
+        resp = requests.post(f"{tei_url}/embed", json={"inputs": [query[:2000]]}, timeout=10)
+        resp.raise_for_status()
+        query_emb = np.array(resp.json()[0])
+        embeddings = index["embeddings"]
+        norms = np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_emb)
+        norms = np.where(norms == 0, 1, norms)
+        similarities = np.dot(embeddings, query_emb) / norms
+        semantic_ranking = list(np.argsort(similarities)[::-1])
+    except Exception as e:
+        logger.warning("Semantic search failed, BM25 only: %s", e)
 
-    top_indices = np.argsort(similarities)[-top_k:][::-1]
+    # RRF fusion
+    k = 60
+    rrf_scores = {}
+    for rank, idx in enumerate(bm25_ranking[:50]):
+        rrf_scores[idx] = rrf_scores.get(idx, 0) + 1 / (k + rank + 1)
+    for rank, idx in enumerate(semantic_ranking[:50]):
+        rrf_scores[idx] = rrf_scores.get(idx, 0) + 1 / (k + rank + 1)
+
+    ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+
     results = []
-    for idx in top_indices:
-        path = index["paths"][idx]
-        method = index["methods"][idx]
-        summary = index["summaries"][idx]
-        results.append((path, method, summary, float(similarities[idx])))
+    for idx, score in ranked[:top_k]:
+        if idx < len(entries):
+            path, method, summary = entries[idx]
+            results.append((path, method, summary, score))
     return results
 
 
 @tool
-def lookup_api_docs(search: str, semantic: bool = False) -> str:
+def lookup_api_docs(search: str) -> str:
     """Look up Tripletex API documentation for specific endpoints.
 
+    Uses hybrid BM25 + semantic search. Works with endpoint paths, keywords,
+    and non-English terms.
+
     Args:
-        search: Resource path or keyword to search for.
-                Examples: "travelExpense/cost", "employee", "invoice/:payment".
-        semantic: Set true for meaning-based search. Use when searching with
-                  Norwegian/Spanish/French terms or when keyword search fails.
-                  Examples: "kontoadministrator", "kreditnota", "nota de gastos".
+        search: What to search for. Examples: "travelExpense/cost", "employee",
+                "invoice/:payment", "kontoadministrator", "nota de gastos".
 
     Returns:
         Formatted API documentation for matching endpoints.
@@ -202,61 +227,25 @@ def lookup_api_docs(search: str, semantic: bool = False) -> str:
     spec = _get_spec()
     paths = spec.get("paths", {})
 
-    if semantic:
-        try:
-            results = _semantic_search(search, top_k=8)
-            matches = []
-            for path, method, summary, score in results:
-                if score < 0.3:
-                    continue
-                details = paths.get(path, {}).get(method, {})
-                if details:
-                    matches.append((path, method, details, score))
+    results = _hybrid_search_api(search, top_k=8)
 
-            if not matches:
-                return f"No relevant endpoints for '{search}'. Try keyword search."
+    if not results:
+        return f"No endpoints found for '{search}'."
 
-            result = [f"# Semantic search: '{search}' ({len(matches)} results)\n"]
-            for path, method, details, score in matches:
-                result.append(f"[relevance: {score:.2f}]")
-                result.append(_format_endpoint(path, method, details, spec))
-                result.append("---\n")
-            return "\n".join(result)
-        except Exception as e:
-            logger.warning("Semantic search failed: %s — falling back to keyword", e)
-
-    # Keyword search
-    search_lower = search.lower().strip("/")
     matches = []
-    for path, methods in paths.items():
-        path_lower = path.lower()
-        if search_lower in path_lower:
-            for method, details in methods.items():
-                if method in ("get", "post", "put", "delete"):
-                    matches.append((path, method, details))
-        elif any(
-            search_lower in d.get("summary", "").lower() for d in methods.values()
-        ):
-            for method, details in methods.items():
-                if method in ("get", "post", "put", "delete"):
-                    if search_lower in details.get("summary", "").lower():
-                        matches.append((path, method, details))
+    for path, method, summary, score in results:
+        details = paths.get(path, {}).get(method, {})
+        if details:
+            matches.append((path, method, details, score))
 
     if not matches:
-        return (
-            f"No endpoints for '{search}'. "
-            "Try semantic=true or broader terms like 'employee', 'customer', 'invoice'."
-        )
+        return f"No endpoints found for '{search}'."
 
-    if len(matches) > 10:
-        matches.sort(key=lambda x: len(x[0]))
-        matches = matches[:10]
-
-    result = [f"# API docs: '{search}' ({len(matches)} endpoints)\n"]
-    for path, method, details in matches:
-        result.append(_format_endpoint(path, method, details, spec))
-        result.append("---\n")
-    return "\n".join(result)
+    output = [f"# API docs: '{search}' ({len(matches)} results)\n"]
+    for path, method, details, score in matches:
+        output.append(_format_endpoint(path, method, details, spec))
+        output.append("---\n")
+    return "\n".join(output)
 
 
 # Pre-download spec if not cached
