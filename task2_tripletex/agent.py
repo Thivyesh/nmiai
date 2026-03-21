@@ -69,7 +69,8 @@ You solve Tripletex accounting tasks. You have reference data and tools to help.
 ## Tools — query tools in English
 - **get_task_workflow** — Workflow steps for the task type
 - **get_payload_template** — EXACT JSON template for an endpoint. Copy it, don't invent fields.
-- **search_past_experience** — Search what worked/failed on similar past tasks. Learn from mistakes.
+- **explain_accounting_concept** — Explains accounting terms and which API operations to use. Use for unfamiliar concepts like "periodization", "depreciation", "purregebyr".
+- **search_past_experience** — Search what worked/failed on similar past tasks.
 - **tripletex_get** — Read API data (find entities, get IDs)
 - **tripletex_post/put/delete** — Execute API calls
 - **lookup_api_docs** — Full schema for endpoints not in templates
