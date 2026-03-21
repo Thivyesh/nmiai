@@ -49,19 +49,21 @@ class TripletexClient:
         return self._request("DELETE", endpoint)
 
 
-# Module-level client reference, set at runtime by the agent
-_client: TripletexClient | None = None
+import contextvars
+
+# Per-request client using contextvars (thread-safe for concurrent requests)
+_client_var: contextvars.ContextVar[TripletexClient | None] = contextvars.ContextVar("tripletex_client", default=None)
 
 
 def set_client(client: TripletexClient) -> None:
-    global _client
-    _client = client
+    _client_var.set(client)
 
 
 def _get_client() -> TripletexClient:
-    if _client is None:
+    client = _client_var.get()
+    if client is None:
         raise RuntimeError("TripletexClient not initialized. Call set_client() first.")
-    return _client
+    return client
 
 
 @tool
