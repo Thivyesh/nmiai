@@ -49,21 +49,19 @@ class TripletexClient:
         return self._request("DELETE", endpoint)
 
 
-import contextvars
-
-# Per-request client using contextvars (thread-safe for concurrent requests)
-_client_var: contextvars.ContextVar[TripletexClient | None] = contextvars.ContextVar("tripletex_client", default=None)
+# Module-level client — safe because requests are serialized via asyncio.Lock in agent.py
+_client: TripletexClient | None = None
 
 
 def set_client(client: TripletexClient) -> None:
-    _client_var.set(client)
+    global _client
+    _client = client
 
 
 def _get_client() -> TripletexClient:
-    client = _client_var.get()
-    if client is None:
+    if _client is None:
         raise RuntimeError("TripletexClient not initialized. Call set_client() first.")
-    return client
+    return _client
 
 
 @tool
@@ -141,11 +139,8 @@ from task2_tripletex.devdocs_tool import search_tripletex_docs
 from task2_tripletex.task_patterns_tool import lookup_task_pattern
 from task2_tripletex.web_search_tool import web_search
 
-# Planner gets read-only API access + all lookup tools
-PLANNER_TOOLS = [tripletex_get, lookup_api_docs, lookup_task_pattern, search_tripletex_docs, web_search]
+# Researcher: task patterns + API reference data + docs for discovery
+PLANNER_TOOLS = [lookup_task_pattern, tripletex_get, lookup_api_docs, search_tripletex_docs, web_search]
 
-# Executor gets write tools + all lookup tools for error recovery
-EXECUTOR_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete, lookup_api_docs, lookup_task_pattern, search_tripletex_docs, web_search]
-
-# Full toolset (if needed)
-ALL_TOOLS = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
+# Executor: write tools + API docs for error recovery only
+EXECUTOR_TOOLS = [tripletex_post, tripletex_put, tripletex_delete, tripletex_get, lookup_api_docs]

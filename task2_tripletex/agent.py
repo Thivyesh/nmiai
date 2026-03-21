@@ -86,7 +86,6 @@ You execute Tripletex tasks. The research brief contains READY-TO-USE payloads.
 - **tripletex_post/put/delete** — Execute the payloads from the brief
 - **tripletex_get** — Read data (only if a step needs a returned ID)
 - **lookup_api_docs** — ONLY if a step fails and you need the correct schema
-- **lookup_task_pattern** / **search_tripletex_docs** / **web_search** — Last resort
 
 ## How to Work
 1. Read the research brief — it has COMPLETE payloads ready to POST/PUT.
