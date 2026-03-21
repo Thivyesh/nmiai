@@ -61,7 +61,8 @@ Keywords: ansatt, employee, Mitarbeiter, empleado, employé, empregado, funcion�
 ### Verified Workflow
 1. POST /employee — {firstName, lastName, email, phoneNumberMobile, dateOfBirth, department: {"id": N}}
    - Do NOT include "employments" in the employee POST body — create employment separately
-   - If sandbox requires userType, use "NO_ACCESS" as default
+   - Do NOT set userType unless the task requires admin access
+   - If POST fails with "Brukertype kan ikke være 0", retry with userType: "STANDARD"
 2. POST /employee/employment — {employee: {"id": N}, startDate: "YYYY-MM-DD", isMainEmployer: true}
    - Only if the prompt mentions a start date / employment start
    - This is a SEPARATE call, not embedded in the employee POST
@@ -228,9 +229,13 @@ Keywords: bilag, voucher, dimensjon, dimension, postering, Buchung, journal entr
 
 ### Verified Workflow
 1. GET /ledger/account?number=NNNN&fields=id — get account IDs
-2. POST /ledger/accountingDimensionName (if creating dimensions)
-3. POST /ledger/accountingDimensionValue (for each value)
-4. POST /ledger/voucher?sendToLedger=true — with postings
+2. If task mentions dimensions/kostsenter:
+   a. POST /ledger/accountingDimensionName — REQUIRED FIRST, creates the dimension container
+      {"dimensionName": "Kostsenter", "description": "Cost center", "dimensionIndex": 1, "active": true}
+      This is NOT automatic — you MUST create it before creating values!
+   b. POST /ledger/accountingDimensionValue — for EACH value
+      {"displayName": "IT", "dimensionIndex": 1, "active": true, "number": "IT", "showInVoucherRegistration": true}
+3. POST /ledger/voucher?sendToLedger=true — with postings
 
 ### Verified Field Gotchas
 - Account: ALWAYS {"id": N} — NEVER {"number": N}
