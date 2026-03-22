@@ -327,25 +327,32 @@ class TripletexAgent:
         ref_data = self._prefetch_reference_data()
         logger.info("Pre-fetched reference data:\n%s", ref_data)
 
-        # Extract file data using Sonnet (if files attached)
-        file_data = ""
-        if request.files:
-            try:
-                file_data = await extract_file_data(request.files)
-                logger.info("Extracted file data: %d chars", len(file_data))
-            except Exception as e:
-                logger.warning("File extraction failed: %s", e)
-
-        # Step 4: Schema discovery — pass experience warnings so it can avoid known errors
+        # Run PDF extraction and schema discovery in PARALLEL
         schema_input = ref_data
         if experience_data:
             schema_input += experience_data
-        schema_data = ""
-        try:
-            schema_data = await discover_schemas(request.prompt, schema_input, file_data)
-            logger.info("Schema discovery: %d chars", len(schema_data))
-        except Exception as e:
-            logger.warning("Schema discovery failed: %s", e)
+
+        async def _extract_files():
+            if not request.files:
+                return ""
+            try:
+                data = await extract_file_data(request.files)
+                logger.info("Extracted file data: %d chars", len(data))
+                return data
+            except Exception as e:
+                logger.warning("File extraction failed: %s", e)
+                return ""
+
+        async def _discover():
+            try:
+                data = await discover_schemas(request.prompt, schema_input)
+                logger.info("Schema discovery: %d chars", len(data))
+                return data
+            except Exception as e:
+                logger.warning("Schema discovery failed: %s", e)
+                return ""
+
+        file_data, schema_data = await asyncio.gather(_extract_files(), _discover())
 
         # Build message with task + all context for executor
         content_parts = [

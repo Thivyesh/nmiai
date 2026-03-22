@@ -73,10 +73,10 @@ async def discover_schemas(prompt: str, ref_data: str, file_data: str = "") -> s
     Returns structured template documentation for the main agent.
     """
     llm = ChatOpenAI(
-        model="gpt-4.1",
+        model="gpt-4.1-mini",
         temperature=0,
         max_retries=2,
-        timeout=30,
+        timeout=25,
     )
 
     agent = create_react_agent(
@@ -97,7 +97,7 @@ async def discover_schemas(prompt: str, ref_data: str, file_data: str = "") -> s
                 {"messages": [message]},
                 config={"recursion_limit": 20},
             ),
-            timeout=45,
+            timeout=30,
         )
         last = result["messages"][-1]
         content = last.content
