@@ -123,45 +123,63 @@ def _bm25_search(query: str, top_k: int = 5) -> list[dict]:
 
 
 def _format_trace(t: dict) -> str:
-    """Format a trace for the agent — includes fixes for errors."""
+    """Format a trace for the agent — structured flow showing what happened."""
     errors = t.get("total_errors", 0)
     prompt = t.get("task_prompt", "")[:150]
 
     entry = f"### Past task (errors: {errors})\n"
-    entry += f"Task: {prompt}\n"
+    entry += f"**Task:** {prompt}\n"
 
-    # Show competition notes first (most valuable)
+    # Competition notes first (most valuable)
     comp_notes = t.get("competition_notes", "")
     if comp_notes:
-        entry += f"⚠️ COMPETITION LESSON: {comp_notes[:300]}\n"
+        entry += f"⚠️ **WARNING:** {comp_notes[:300]}\n"
 
-    # Show lesson learned
-    lesson = t.get("lesson_learned", "")
-    if lesson:
-        entry += f"Lesson: {lesson[:200]}\n"
+    # Show the execution flow: what was called, with what payload, what happened
+    tool_calls = t.get("tool_calls", [])
+    failed_endpoints = t.get("failed_endpoints", [])
+    failed_errors = {fe.get("endpoint", ""): fe.get("error", "")[:150] for fe in failed_endpoints}
 
-    # Enriched format (has fixes)
+    if tool_calls:
+        entry += "**Execution flow:**\n"
+        for tc in tool_calls[:10]:
+            name = tc.get("name", "")
+            args = tc.get("args", "")[:200]
+            # Check if this was a failed call
+            if name in failed_errors and any(name == fe.get("endpoint", "") for fe in failed_endpoints):
+                entry += f"  ❌ {name}({args})\n"
+            elif name.startswith("tripletex_"):
+                entry += f"  ✓ {name}({args})\n"
+            else:
+                entry += f"  → {name}({args})\n"
+
+    if failed_endpoints:
+        entry += "**Errors encountered:**\n"
+        for fe in failed_endpoints[:3]:
+            entry += f"  - {fe.get('endpoint', '')}: {fe.get('error', '')[:200]}\n"
+
+    # Enriched format (has fixes from enrich_traces.py)
     successful = t.get("successful_calls", "")
     failed_with_fixes = t.get("failed_calls_with_fixes", "")
     correct_templates = t.get("correct_templates", "")
 
-    if successful:
-        lines = [l for l in successful.split("\n") if l.strip()][:5]
-        entry += f"Worked: {'; '.join(lines)}\n"
     if failed_with_fixes:
-        entry += f"Failures & Fixes:\n{failed_with_fixes[:400]}\n"
+        entry += f"**How to fix:**\n{failed_with_fixes[:400]}\n"
     if correct_templates:
-        entry += f"Correct templates:\n{correct_templates[:300]}\n"
+        entry += f"**Correct payloads:**\n{correct_templates[:300]}\n"
+    if successful and not tool_calls:
+        lines = [l for l in successful.split("\n") if l.strip()][:5]
+        entry += f"**Worked:** {'; '.join(lines)}\n"
 
     # Fallback format (basic index)
-    if not successful and not failed_with_fixes:
+    if not successful and not failed_with_fixes and not tool_calls:
         tool_summary = t.get("tool_summary", "")
         success_lines = [l for l in tool_summary.split("\n") if " OK " in l and "tripletex_" in l]
         failed_lines = [l for l in tool_summary.split("\n") if " ERR " in l]
         if success_lines:
-            entry += f"Worked: {'; '.join(success_lines[:5])}\n"
+            entry += f"**Worked:** {'; '.join(success_lines[:5])}\n"
         if failed_lines:
-            entry += f"Failed: {'; '.join(failed_lines[:3])}\n"
+            entry += f"**Failed:** {'; '.join(failed_lines[:3])}\n"
 
     return entry
 
