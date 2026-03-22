@@ -75,10 +75,10 @@ async def extract_file_data(files: list) -> str:
     if not files:
         return ""
 
-    # Use Gemini Flash for extraction — no Anthropic credit dependency
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+    # Use GPT-4.1-mini for extraction — cheap, reliable
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(
+        model="gpt-4.1-mini",
         temperature=0,
         max_retries=2,
         timeout=30,
