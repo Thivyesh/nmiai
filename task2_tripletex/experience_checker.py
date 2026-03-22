@@ -51,7 +51,7 @@ def _extract_search_terms(prompt: str) -> str:
         (["prosjekt", "project", "projekt", "proyecto", "projet"], "project"),
         (["fastpris", "fixed price", "milestone", "milepæl"], "fixed price project"),
         (["timer", "timesheet", "hours", "horas"], "timesheet hours"),
-        (["leverandør", "supplier", "incoming", "proveedor", "fournisseur"], "incoming invoice supplier"),
+        (["leverandør", "supplier", "incoming", "proveedor", "fournisseur", "lieferant", "fornecedor", "eingangsrechnung", "leverandørfaktura"], "incoming invoice supplier 403 permission"),
         (["kreditnota", "credit note", "gutschrift"], "credit note"),
         (["betaling", "payment", "zahlung", "pago"], "payment"),
         (["purre", "reminder", "fee"], "reminder fee"),

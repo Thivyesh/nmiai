@@ -223,8 +223,16 @@ def search_past_experience(task_description: str) -> str:
     if not results:
         return f"No past experience found for '{task_description}'."
 
-    # Sort: fewer errors first, then by total tools (simpler = better)
-    results.sort(key=lambda x: (x.get("total_errors", 99), x.get("total_tool_calls", 99)))
+    # Sort: traces with warnings/errors FIRST (most useful for learning),
+    # then by competition_notes presence, then fewer tool calls
+    def sort_key(x):
+        has_warning = bool(x.get("competition_notes", ""))
+        has_errors = x.get("total_errors", 0) > 0
+        return (
+            0 if has_warning else (1 if has_errors else 2),  # warnings first, then errors, then success
+            x.get("total_tool_calls", 99),
+        )
+    results.sort(key=sort_key)
 
     output = [_format_trace(t) for t in results[:3]]
     return "\n---\n".join(output)
