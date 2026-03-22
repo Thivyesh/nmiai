@@ -19,3 +19,11 @@ mlflow.db
 runs/
 *.pt
 .DS_Store
+
+# Test outputs
+task1_object_detection/submission/test_sandbox/output/
+task1_object_detection/submission/test_sandbox/test_images/
+task1_object_detection/submission/test_sandbox/submission.zip
+task1_object_detection/data/
+*.cache
+*.zip
