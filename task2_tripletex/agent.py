@@ -15,6 +15,7 @@ from langgraph.prebuilt import create_react_agent
 
 from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.pdf_extractor import extract_file_data
+from task2_tripletex.schema_agent import discover_schemas
 from task2_tripletex.tools import (
     EXECUTOR_TOOLS,
     PLANNER_TOOLS,
@@ -59,9 +60,9 @@ AGENT_SYSTEM_PROMPT = """\
 You solve Tripletex accounting tasks. You MUST execute API calls — not just research.
 
 ## PHASE 1: PLAN (max 3 tool calls)
-1. get_task_workflow (English description) → understand the steps
-2. get_payload_template for the FIRST endpoint → get the JSON template
-3. If needed: tripletex_get for ONE missing ID (account number, etc.)
+1. Read the "Endpoint Templates" section above — schemas are already resolved for you
+2. If templates are provided above, skip get_task_workflow and get_payload_template — go straight to EXECUTE
+3. If needed: tripletex_get for missing IDs (account numbers, entity lookups, etc.)
 
 ## PHASE 2: EXECUTE (use tripletex_post/put/delete)
 Execute EACH step. Do NOT stop after planning. You MUST call tripletex_post/put/delete.
@@ -338,11 +339,21 @@ class TripletexAgent:
             except Exception as e:
                 logger.warning("File extraction failed: %s", e)
 
-        # Build message with task + pre-fetched data + extracted file data
+        # Schema discovery: find all endpoint templates needed for this task
+        schema_data = ""
+        try:
+            schema_data = await discover_schemas(request.prompt, ref_data, file_data)
+            logger.info("Schema discovery: %d chars", len(schema_data))
+        except Exception as e:
+            logger.warning("Schema discovery failed: %s", e)
+
+        # Build message with task + pre-fetched data + schemas + extracted file data
         content_parts = [
             {"type": "text", "text": f"## Task\n\n{request.prompt}"},
             {"type": "text", "text": f"\n{ref_data}"},
         ]
+        if schema_data:
+            content_parts.append({"type": "text", "text": schema_data})
         if file_data:
             content_parts.append({"type": "text", "text": file_data})
 
