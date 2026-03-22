@@ -13,7 +13,8 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 ES_URL = "http://localhost:9200"
-INDEX = "tripletex-traces"
+INDEX = "tripletex-experience"  # Enriched index with fixes
+INDEX_FALLBACK = "tripletex-traces"  # Basic index
 TEI_URL = os.getenv("TEI_URL", "http://localhost:8080")
 TRACE_PATH = Path(__file__).parent / "trace_history.json"
 
@@ -87,22 +88,30 @@ def _semantic_search(query: str, top_k: int = 5) -> list[tuple[dict, float]]:
 
 
 def _bm25_search(query: str, top_k: int = 5) -> list[dict]:
-    """Search traces via Elasticsearch BM25."""
+    """Search traces via Elasticsearch BM25 — uses enriched index."""
     try:
         es = Elasticsearch(ES_URL)
-        if not es.indices.exists(index=INDEX):
+        # Try enriched index first, fallback to basic
+        idx = INDEX if es.indices.exists(index=INDEX) else INDEX_FALLBACK
+        if not es.indices.exists(index=idx):
             return []
     except Exception:
         return []
 
     results = es.search(
-        index=INDEX,
+        index=idx,
         body={
             "size": top_k,
             "query": {
                 "multi_match": {
                     "query": query,
-                    "fields": ["task_prompt^2", "tool_summary^3", "successful_endpoints^2"],
+                    "fields": [
+                        "task_prompt^2",
+                        "successful_calls^2",
+                        "failed_calls_with_fixes^3",
+                        "correct_templates^2",
+                        "tags^2",
+                    ],
                     "type": "most_fields",
                     "fuzziness": "AUTO",
                 }
@@ -113,23 +122,36 @@ def _bm25_search(query: str, top_k: int = 5) -> list[dict]:
 
 
 def _format_trace(t: dict) -> str:
-    """Format a trace for the agent."""
+    """Format a trace for the agent — includes fixes for errors."""
     errors = t.get("total_errors", 0)
     prompt = t.get("task_prompt", "")[:150]
-    tool_summary = t.get("tool_summary", "")
-
-    success_lines = [l for l in tool_summary.split("\n") if " OK " in l and "tripletex_" in l]
-    failed_lines = [l for l in tool_summary.split("\n") if " ERR " in l]
-    failed_text = t.get("failed_endpoints_text", "")
 
     entry = f"### Past task (errors: {errors})\n"
     entry += f"Task: {prompt}\n"
-    if success_lines:
-        entry += f"Worked: {'; '.join(success_lines[:5])}\n"
-    if failed_lines:
-        entry += f"Failed: {'; '.join(failed_lines[:3])}\n"
-    if failed_text:
-        entry += f"Error details: {failed_text[:200]}\n"
+
+    # Enriched format (has fixes)
+    successful = t.get("successful_calls", "")
+    failed_with_fixes = t.get("failed_calls_with_fixes", "")
+    correct_templates = t.get("correct_templates", "")
+
+    if successful:
+        lines = [l for l in successful.split("\n") if l.strip()][:5]
+        entry += f"Worked: {'; '.join(lines)}\n"
+    if failed_with_fixes:
+        entry += f"Failures & Fixes:\n{failed_with_fixes[:400]}\n"
+    if correct_templates:
+        entry += f"Correct templates:\n{correct_templates[:300]}\n"
+
+    # Fallback format (basic index)
+    if not successful and not failed_with_fixes:
+        tool_summary = t.get("tool_summary", "")
+        success_lines = [l for l in tool_summary.split("\n") if " OK " in l and "tripletex_" in l]
+        failed_lines = [l for l in tool_summary.split("\n") if " ERR " in l]
+        if success_lines:
+            entry += f"Worked: {'; '.join(success_lines[:5])}\n"
+        if failed_lines:
+            entry += f"Failed: {'; '.join(failed_lines[:3])}\n"
+
     return entry
 
 
