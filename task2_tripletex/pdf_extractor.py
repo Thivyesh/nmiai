@@ -70,12 +70,12 @@ async def extract_file_data(files: list) -> str:
     if not files:
         return ""
 
-    llm = ChatAnthropic(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
         temperature=0,
         max_retries=2,
-        timeout=30.0,
+        timeout=30,
     )
 
     content_parts = [{"type": "text", "text": EXTRACTION_PROMPT}]
