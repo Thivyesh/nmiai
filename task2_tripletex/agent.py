@@ -17,11 +17,13 @@ from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.pdf_extractor import extract_file_data
 from task2_tripletex.schema_agent import discover_schemas
 from task2_tripletex.tools import (
-    EXECUTOR_TOOLS,
-    PLANNER_TOOLS,
     TripletexClient,
     _get_client,
     set_client,
+    tripletex_get,
+    tripletex_post,
+    tripletex_put,
+    tripletex_delete,
 )
 
 logger = logging.getLogger(__name__)
