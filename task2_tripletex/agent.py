@@ -57,51 +57,39 @@ STEPS:
 """
 
 AGENT_SYSTEM_PROMPT = """\
-You solve Tripletex accounting tasks. You MUST execute API calls — not just research.
+You are a Tripletex API executor. Endpoint templates and reference data are provided above.
+Your ONLY job is to execute API calls. Do NOT research — that's already done.
 
-## PHASE 1: PLAN (max 3 tool calls)
-1. Read the "Endpoint Templates" section above — schemas are already resolved for you
-2. If templates are provided above, skip get_task_workflow and get_payload_template — go straight to EXECUTE
-3. If needed: tripletex_get for missing IDs (account numbers, entity lookups, etc.)
+## Process
+1. Read the "Endpoint Templates" section — it has the exact JSON for each step
+2. Use tripletex_get ONLY if you need an ID not in the pre-fetched data
+3. Fill each template with real IDs + values from the prompt → execute immediately
+4. After each POST/PUT, save the returned ID for the next step
+5. Repeat until ALL steps are done
 
-## PHASE 2: EXECUTE (use tripletex_post/put/delete)
-Execute EACH step. Do NOT stop after planning. You MUST call tripletex_post/put/delete.
-- Fill template with real IDs + prompt values → tripletex_post
-- Save the returned ID for the next step
-- Get next template → fill → execute → repeat until ALL steps done
-
-## PHASE 3: CONTINUE (if multi-step)
-After each successful POST/PUT, check if more steps remain. If yes:
-- get_payload_template for the next endpoint
-- Fill with IDs from previous steps
-- Execute immediately
-
-## Tools by phase — query all lookup tools in English
-PLAN: get_task_workflow, get_payload_template, explain_accounting_concept
-LOOKUP: tripletex_get (find existing IDs), search_past_experience, lookup_api_docs
-EXECUTE: tripletex_post, tripletex_put, tripletex_delete
-RECOVER: get_payload_template (re-check template on error), lookup_api_docs
+## Tools
+- tripletex_get — Look up IDs (employees, customers, accounts, projects)
+- tripletex_post — Create entities
+- tripletex_put — Update entities or trigger actions (payment, credit note, invoice)
+- tripletex_delete — Delete entities
+- get_payload_template — ONLY if a template is missing from the pre-resolved schemas above
 
 ## Rules
 - Copy JSON from templates. Do NOT construct from memory. Do NOT invent field names.
 - EXACT values from the prompt. Never modify names, emails, amounts.
-- Account lookups: GET /ledger/account?number=NNNN (NOT /account). Always use /ledger/account.
+- Account lookups: GET /ledger/account?number=NNNN (NOT /account).
 - Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
-- Do NOT modify existing entities. Use their ID as-is. Do NOT update/change fields.
+- Do NOT modify existing entities. Use their ID as-is.
   The competition pre-loads entities — modifying them breaks checks.
   Only CREATE new entities if the task explicitly asks you to.
 - For payment: READ "amount" from invoice response. Do NOT calculate.
 
-## File Attachments (PDF/images)
-Extract EVERY piece of data from attached files:
-- Names, dates, addresses, phone numbers, email, national ID, bank account
-- Salary/wage amounts, employment percentage, occupation codes
-- Product names, prices, quantities, invoice numbers
-Include ALL extracted data in API calls — every field will be checked.
+## File Attachments
+If extracted file data is provided above, use ALL fields from it in API calls.
 Include employee address: {addressLine1, postalCode, city}
 
 ## Error Recovery
-If a step fails: get_payload_template → compare → fix → retry ONCE → skip if still failing.
+If a step fails: check get_payload_template → compare your payload → fix → retry ONCE.
 """
 
 
@@ -127,13 +115,9 @@ class TripletexAgent:
             timeout=60,
         )
 
-        # All tools available to the single agent (deduplicate by name)
-        seen = set()
-        all_tools = []
-        for t in PLANNER_TOOLS + EXECUTOR_TOOLS:
-            if t.name not in seen:
-                seen.add(t.name)
-                all_tools.append(t)
+        # Executor tools only — schema agent handles research
+        from task2_tripletex.workflow_tools import get_payload_template
+        all_tools = [tripletex_get, tripletex_post, tripletex_put, tripletex_delete, get_payload_template]
         self.agent = create_react_agent(
             model=self.agent_llm,
             tools=all_tools,
