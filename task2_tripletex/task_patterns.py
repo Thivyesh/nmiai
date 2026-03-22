@@ -194,8 +194,10 @@ Keywords: prosjekt, project, Projekt, proyecto, projet, projeto, fixed price, fa
 2. POST /customer (if needed) — with organizationNumber
 3. POST /product — create product for the fixed-price line item
 4. POST /project — {name, startDate, customer: {"id": N}, projectManager: {"id": N}, isFixedPrice: true}
-5. POST /project/orderline — add line item with product, amount, and date (product REQUIRED for invoiceable lines)
-6. PUT /project/{id}/:invoice — invoice the project (for milestone: set amount in orderline to milestone %)
+5. POST /project/orderline — add line item with product, amount, date, isChargeable: true
+6. POST /order — create order for the milestone amount with the product
+7. PUT /order/{id}/:invoice?invoiceDate=YYYY-MM-DD — invoice the order
+NOTE: There is NO PUT /project/:invoice endpoint. Use the order→invoice flow for milestone billing.
 
 ### Verified Field Gotchas
 - projectManager usually required (use account owner ID if no specific manager named)

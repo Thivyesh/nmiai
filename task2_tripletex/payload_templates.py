@@ -173,7 +173,7 @@ PAYLOAD_TEMPLATES = {
             "date": "<YYYY-MM-DD>",
             "isChargeable": True,
         },
-        "notes": "isChargeable MUST be true for invoiceable lines. date and product are also REQUIRED. Create a product first (POST /product). For milestone: set unitPriceExcludingVatCurrency to the milestone amount (e.g. 50% of total). Then use PUT /project/{id}/:invoice.",
+        "notes": "isChargeable MUST be true for invoiceable lines. date and product are also REQUIRED. Create a product first (POST /product). For milestone billing: also create an order (POST /order) and invoice it (PUT /order/{id}/:invoice).",
     },
     "POST /contact": {
         "description": "Create contact on customer",
@@ -318,11 +318,11 @@ PAYLOAD_TEMPLATES = {
         },
         "notes": "Creates an activity on a project. Use GET /project/projectActivity?projectId=N to check if activity already exists.",
     },
-    "PUT /project/{id}/:invoice": {
-        "description": "Create invoice from project hours",
+    "PUT /order/{id}/:invoice": {
+        "description": "Create invoice from order (use for project milestone billing too)",
         "payload": "NONE — use query params only",
-        "url_format": "/project/<PROJECT_ID>/:invoice?invoiceDate=<DATE>&sendToCustomer=false",
-        "notes": "Invoices a project based on logged hours. Pass body='{}'. All params in URL.",
+        "url_format": "/order/<ORDER_ID>/:invoice?invoiceDate=<DATE>&sendToCustomer=false",
+        "notes": "Invoices an order. For project milestones: create an order with the milestone amount first, then invoice it. There is NO /project/:invoice endpoint. Pass body='{}'.",
     },
     "POST /project/hourlyRates": {
         "description": "Set hourly rates for a project",
