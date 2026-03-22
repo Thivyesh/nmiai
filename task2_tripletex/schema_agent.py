@@ -73,7 +73,7 @@ async def discover_schemas(prompt: str, ref_data: str, file_data: str = "") -> s
     Returns structured template documentation for the main agent.
     """
     llm = ChatOpenAI(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         temperature=0,
         max_retries=2,
         timeout=25,
