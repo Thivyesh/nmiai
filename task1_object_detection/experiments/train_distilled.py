@@ -115,10 +115,14 @@ def train_group(group_name, epochs=30, imgsz=224, batch_size=32, lr=1e-3, temper
     train_transform = transforms.Compose([
         transforms.Resize((imgsz, imgsz)),
         transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
-        transforms.RandomAffine(degrees=5, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3, hue=0.05),
+        transforms.RandomAffine(degrees=10, translate=(0.15, 0.15), scale=(0.8, 1.2)),
+        transforms.RandomPerspective(distortion_scale=0.1, p=0.3),
+        transforms.RandomGrayscale(p=0.05),
+        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.3, scale=(0.02, 0.15)),
     ])
     val_transform = transforms.Compose([
         transforms.Resize((imgsz, imgsz)),

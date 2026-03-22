@@ -17,13 +17,11 @@ from pathlib import Path
 
 import numpy as np
 import torch
-# ultralytics 8.1.0 .pt files need weights_only=False with torch >=2.6
-_original_torch_load = torch.load
-torch.load = lambda *a, **kw: _original_torch_load(*a, **{**kw, "weights_only": False})
 import torch.nn as nn
 from torchvision import transforms
 from torchvision.models import efficientnet_b1
 from PIL import Image
+from safetensors.torch import load_file
 from ultralytics import YOLO
 
 # 9 super-category names matching the detector's class order
@@ -41,24 +39,30 @@ def load_detector(device):
 
 
 def load_classifiers(device):
-    """Load per-group distilled MobileNetV3 classifiers."""
+    """Load per-group distilled EfficientNet-b1 classifiers from safetensors."""
     classifiers = {}
-    classifier_dir = Path(__file__).parent / "classifiers"
+    base = Path(__file__).parent
 
-    for group_name in GROUP_NAMES:
-        model_path = classifier_dir / group_name / "best.pt"
-        classes_path = classifier_dir / group_name / "classes.json"
+    # Load all tensors (keys prefixed with "groupname##layer.name")
+    all_tensors = load_file(str(base / "classifiers.safetensors"), device=str(device))
 
-        if not model_path.exists() or not classes_path.exists():
-            continue
+    # Load class mappings
+    with open(base / "classifier_classes.json") as f:
+        class_data = json.load(f)
 
-        with open(classes_path) as f:
-            classes = json.load(f)
+    # Group tensors by group name
+    group_states = {}
+    for key, tensor in all_tensors.items():
+        group_name, param_name = key.split("##", 1)
+        group_states.setdefault(group_name, {})[param_name] = tensor
 
+    for group_name, state_dict in group_states.items():
+        classes = class_data[group_name]
         n_classes = len(classes)
+
         model = efficientnet_b1(weights=None)
         model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, n_classes)
-        model.load_state_dict(torch.load(str(model_path), map_location=device))
+        model.load_state_dict(state_dict)
         model = model.to(device)
         model.eval()
 

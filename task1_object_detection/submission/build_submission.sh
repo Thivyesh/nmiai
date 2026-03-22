@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build the submission zip with all required files.
-# Usage: bash task1_object_detection/submission/build_submission.sh
+# Build submission zip. Uses safetensors for classifiers (no pickle).
+# Weight files: detector.pt (1) + classifiers.safetensors (1) = 2/3 limit
 set -e
 
 TASK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,98 +9,77 @@ BUILD_DIR="$TASK_ROOT/output/submission_build"
 OUTPUT_ZIP="$TASK_ROOT/output/submission.zip"
 
 echo "=== Building submission ==="
-
-# Clean build directory
 rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR/classifiers"
+mkdir -p "$BUILD_DIR"
 
-# Copy run.py
 cp "$SUBMISSION_DIR/run.py" "$BUILD_DIR/run.py"
 
-# Copy detector weights
-# Use 9-class superclass detector (routes to group classifiers)
-DETECTOR_WEIGHTS="$TASK_ROOT/output/models/superclass_yolov8m_e50/weights/best.pt"
-if [ ! -f "$DETECTOR_WEIGHTS" ]; then
-    echo "ERROR: Detector weights not found at $DETECTOR_WEIGHTS"
-    exit 1
-fi
-cp "$DETECTOR_WEIGHTS" "$BUILD_DIR/detector.pt"
+# Detector
+DETECTOR="$TASK_ROOT/output/models/superclass_yolov8m_e50/weights/best.pt"
+[ ! -f "$DETECTOR" ] && echo "ERROR: detector not found" && exit 1
+cp "$DETECTOR" "$BUILD_DIR/detector.pt"
 
-# Copy distilled classifiers
-for group_dir in "$TASK_ROOT/output/models/distilled_v2_effb1"/*/; do
-    group_name=$(basename "$group_dir")
-    mkdir -p "$BUILD_DIR/classifiers/$group_name"
-    cp "$group_dir/best.pt" "$BUILD_DIR/classifiers/$group_name/best.pt"
-    cp "$group_dir/classes.json" "$BUILD_DIR/classifiers/$group_name/classes.json"
-done
-
-# Generate category mapping
-echo "Generating category mapping..."
+# Classifiers (safetensors + JSON)
 cd "$TASK_ROOT/.."
+uv run python -c "
+import torch, json
+from pathlib import Path
+from safetensors.torch import save_file
+
+_orig = torch.load
+torch.load = lambda *a, **kw: _orig(*a, **{**kw, 'weights_only': False})
+
+MODEL_DIR = Path('task1_object_detection/output/models/distilled_v2_effb1')
+tensors, classes = {}, {}
+for gd in sorted(MODEL_DIR.iterdir()):
+    if not gd.is_dir(): continue
+    mp, cp = gd/'best.pt', gd/'classes.json'
+    if not mp.exists(): continue
+    state = torch.load(str(mp), map_location='cpu')
+    with open(cp) as f: classes[gd.name] = json.load(f)
+    for k,v in state.items(): tensors[f'{gd.name}##{k}'] = v
+
+save_file(tensors, '$BUILD_DIR/classifiers.safetensors')
+with open('$BUILD_DIR/classifier_classes.json','w') as f: json.dump(classes,f)
+sz = Path('$BUILD_DIR/classifiers.safetensors').stat().st_size/1024/1024
+print(f'Classifiers: {sz:.1f}MB, {len(classes)} groups')
+"
+
+# Category mapping
 uv run python -c "
 import json
 from pathlib import Path
-
-TASK_ROOT = Path('task1_object_detection')
-
-with open(TASK_ROOT / 'data/coco_dataset/train/annotations.json') as f:
+with open('task1_object_detection/data/coco_dataset/train/annotations.json') as f:
     coco = json.load(f)
-
-cat_map = {c['id']: c['name'] for c in coco['categories']}
-
-SUPER_CATEGORIES = {
-    'knekkebroed': ['knekkebrød', 'knekke', 'flatbrød', 'wasa', 'sigdal', 'leksands', 'ryvita', 'korni'],
-    'coffee': ['kaffe', 'coffee', 'espresso', 'nescafe', 'evergood', 'friele', 'ali ', 'dolce gusto', 'cappuccino', 'kapsel'],
-    'tea': [' te ', 'tea', 'twinings', 'lipton', 'pukka', 'urtete'],
-    'cereal': ['frokost', 'havre', 'müsli', 'granola', 'corn flakes', 'cheerios', 'cruesli', 'puffet', 'fras'],
-    'eggs': ['egg'],
-    'spread': ['smør', 'bremykt', 'brelett', 'ost ', 'cream cheese'],
-    'cookies': ['kjeks', 'cookie', 'grissini'],
-    'chocolate': ['sjokolade', 'nugatti', 'regia', 'cocoa'],
+cat_map = {c['id']:c['name'] for c in coco['categories']}
+SUPERS = {
+    'knekkebroed':['knekkebrød','knekke','flatbrød','wasa','sigdal','leksands','ryvita','korni'],
+    'coffee':['kaffe','coffee','espresso','nescafe','evergood','friele','ali ','dolce gusto','cappuccino','kapsel'],
+    'tea':[' te ','tea','twinings','lipton','pukka','urtete'],
+    'cereal':['frokost','havre','müsli','granola','corn flakes','cheerios','cruesli','puffet','fras'],
+    'eggs':['egg'],'spread':['smør','bremykt','brelett','ost ','cream cheese'],
+    'cookies':['kjeks','cookie','grissini'],'chocolate':['sjokolade','nugatti','regia','cocoa'],
 }
-
-cat_id_to_group = {}
-group_classes = {}
-for cid, name in cat_map.items():
-    name_lower = name.lower()
+c2g,gc = {},{}
+for cid,name in cat_map.items():
+    nl = name.lower()
     matched = False
-    for g, kws in SUPER_CATEGORIES.items():
-        if any(kw in name_lower for kw in kws):
-            cat_id_to_group[str(cid)] = g
-            group_classes.setdefault(g, []).append(cid)
-            matched = True
-            break
-    if not matched:
-        cat_id_to_group[str(cid)] = 'other'
-        group_classes.setdefault('other', []).append(cid)
-
-for g in group_classes:
-    group_classes[g] = sorted(group_classes[g])
-
-mapping = {
-    'cat_id_to_name': {str(k): v for k, v in cat_map.items()},
-    'cat_id_to_group': cat_id_to_group,
-    'group_classes': group_classes,
-}
-
-out = Path('$BUILD_DIR') / 'category_mapping.json'
-with open(out, 'w') as f:
-    json.dump(mapping, f, indent=2, ensure_ascii=False)
-print(f'Saved category mapping ({len(cat_map)} categories, {len(group_classes)} groups)')
+    for g,kws in SUPERS.items():
+        if any(kw in nl for kw in kws): c2g[str(cid)]=g; gc.setdefault(g,[]).append(cid); matched=True; break
+    if not matched: c2g[str(cid)]='other'; gc.setdefault('other',[]).append(cid)
+with open('$BUILD_DIR/category_mapping.json','w') as f:
+    json.dump({'cat_id_to_name':{str(k):v for k,v in cat_map.items()},'cat_id_to_group':c2g,'group_classes':{g:sorted(v) for g,v in gc.items()}},f,indent=2,ensure_ascii=False)
+print('Category mapping saved')
 "
 
-# Create zip
+# Zip
 cd "$BUILD_DIR"
 rm -f "$OUTPUT_ZIP"
 zip -r "$OUTPUT_ZIP" . -x ".*" "__MACOSX/*"
 
 echo ""
-echo "=== Submission built ==="
-echo "  Zip: $OUTPUT_ZIP"
+echo "=== Submission ==="
 echo "  Size: $(du -h "$OUTPUT_ZIP" | awk '{print $1}')"
-echo ""
-echo "  Contents:"
-unzip -l "$OUTPUT_ZIP" | head -20
-echo ""
-echo "  Verify: unzip -l $OUTPUT_ZIP | head -20"
-echo "  Upload at the competition submit page."
+unzip -l "$OUTPUT_ZIP"
+echo "  Weight files: $(unzip -l "$OUTPUT_ZIP" | grep -cE '\.pt|\.safetensors')/3 limit"
+echo "  Python files: $(unzip -l "$OUTPUT_ZIP" | grep -c '\.py')/10 limit"

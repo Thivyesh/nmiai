@@ -12,7 +12,8 @@ RUN pip install --no-cache-dir \
     Pillow==10.2.0 \
     numpy==1.26.4 \
     scikit-learn==1.4.0 \
-    scipy==1.12.0
+    scipy==1.12.0 \
+    safetensors==0.4.2
 
 # No network after this point (simulated by not installing anything else)
 WORKDIR /app
