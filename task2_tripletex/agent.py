@@ -93,7 +93,11 @@ If extracted file data is provided above, use ALL fields from it in API calls.
 Include employee address: {addressLine1, postalCode, city}
 
 ## Error Recovery
-If a step fails: check get_payload_template → compare your payload → fix → retry ONCE.
+- If a step fails with 422: check get_payload_template → compare your payload → fix → retry ONCE.
+- If a step fails with 403 "permission": the endpoint is not available. Use an alternative:
+  - /incomingInvoice 403 → book as a voucher instead: POST /ledger/voucher with debit expense account + credit supplier account (2400)
+  - /project/:invoice 404 → create an order (POST /order) and invoice it (PUT /order/{id}/:invoice)
+- If a step fails with 409 "duplicate": the entity already exists. GET it instead of creating.
 """
 
 

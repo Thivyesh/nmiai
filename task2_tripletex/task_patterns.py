@@ -452,6 +452,11 @@ Keywords: leverandørfaktura, supplier invoice, incoming invoice, fatura do forn
 1. POST /supplier — {name, organizationNumber, email}
 2. GET /ledger/account?number=NNNN&fields=id — get account ID for expense posting
 3. POST /incomingInvoice?sendTo=ledger — register the invoice
+4. If step 3 fails with 403 "permission": use voucher fallback instead:
+   - POST /ledger/voucher?sendToLedger=true with two postings:
+     - Debit: expense account (the account from step 2), amountGross = amount excl VAT
+     - Credit: supplier account 2400, amountGross = -amount excl VAT
+   - This books the expense without the incomingInvoice module
 
 ### CRITICAL: Incoming invoice uses FLAT IDs, not nested objects!
 The /incomingInvoice endpoint uses a DIFFERENT field format than other endpoints:
