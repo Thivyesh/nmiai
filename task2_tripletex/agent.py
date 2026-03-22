@@ -15,7 +15,6 @@ from langgraph.prebuilt import create_react_agent
 
 from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.pdf_extractor import extract_file_data
-from task2_tripletex.prefetch_agent import prefetch_for_task
 from task2_tripletex.tools import (
     EXECUTOR_TOOLS,
     PLANNER_TOOLS,
@@ -57,19 +56,14 @@ STEPS:
 """
 
 AGENT_SYSTEM_PROMPT = """\
-You solve Tripletex accounting tasks. You receive pre-fetched data from a helper agent.
-
-## CONTEXT YOU RECEIVE
-- Pre-fetched data: existing entities (employees, customers, invoices), IDs, reference data
-- Extracted file data: structured fields from PDF/image attachments (if any)
-- These are VERIFIED from the sandbox. Trust them. Do NOT re-search for these entities.
+You solve Tripletex accounting tasks. You have reference data and tools to help.
 
 ## STRICT PROCESS
-1. READ the pre-fetched data — it shows what already exists in the sandbox
-2. Call get_task_workflow (English) → understand the steps
-3. Call get_payload_template for each endpoint → get exact JSON to copy
-4. Fill in templates with IDs from pre-fetched data + values from the prompt
-5. Execute with tripletex_post/put/delete
+1. Call get_task_workflow (English description) → understand the steps
+2. Call get_payload_template for each endpoint → get exact JSON to copy
+3. Use tripletex_get ONLY for IDs not in the pre-fetched data
+4. If task says entities EXIST ("has invoice", "outstanding"): search for them with tripletex_get
+5. Fill in templates with real IDs + prompt values → execute with tripletex_post/put/delete
 6. After each POST, save returned ID for next steps
 7. For payment: READ "amount" from invoice response. Do NOT calculate.
 
@@ -77,7 +71,7 @@ You solve Tripletex accounting tasks. You receive pre-fetched data from a helper
 - **get_task_workflow** — Workflow steps for the task type
 - **get_payload_template** — EXACT JSON template for an endpoint. Copy it, don't invent fields.
 - **explain_accounting_concept** — Explains accounting terms and which API operations to use. Use for unfamiliar concepts like "periodization", "depreciation", "purregebyr".
-- **search_past_experience** — Search past tasks for lessons learned. Query in English. Shows fixes for errors.
+- **search_past_experience** — Search what worked/failed on similar past tasks.
 - **tripletex_get** — Read API data (find entities, get IDs)
 - **tripletex_post/put/delete** — Execute API calls
 - **lookup_api_docs** — Full schema for endpoints not in templates
@@ -112,10 +106,9 @@ class TripletexAgent:
     _lock = asyncio.Lock()
 
     def __init__(self):
-        # Single agent: GPT-4o
-        from langchain_openai import ChatOpenAI
-        self.agent_llm = ChatOpenAI(
-            model="gpt-4o",
+        # Single agent: Gemini Pro
+        self.agent_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-pro",
             temperature=0,
             max_retries=2,
             timeout=60,
@@ -257,57 +250,7 @@ class TripletexAgent:
         except Exception:
             pass
 
-        # Division (for salary tasks)
-        try:
-            r = client.get("/division", {"fields": "id,name", "count": "1"})
-            vals = r.get("values", [])
-            if vals:
-                data["division_id"] = vals[0]["id"]
-                data["division_exists"] = True
-            else:
-                data["division_exists"] = False
-        except Exception:
-            data["division_exists"] = False
-
-        # Salary types
-        try:
-            r = client.get("/salary/type", {"fields": "id,number,name", "count": "10"})
-            vals = r.get("values", [])
-            key_types = [v for v in vals if v.get("number") in ("2000", "2001", "2002")]
-            if key_types:
-                data["salary_types"] = [{"id": v["id"], "num": v["number"], "name": v["name"]} for v in key_types]
-        except Exception:
-            pass
-
-        # Existing customers (first 5)
-        try:
-            r = client.get("/customer", {"fields": "id,name,organizationNumber", "count": "5"})
-            vals = r.get("values", [])
-            if vals:
-                data["existing_customers"] = [{"id": v["id"], "name": v.get("name", "")} for v in vals]
-        except Exception:
-            pass
-
-        # Existing employees (first 5)
-        try:
-            r = client.get("/employee", {"fields": "id,firstName,lastName,email", "count": "5"})
-            vals = r.get("values", [])
-            if vals:
-                data["existing_employees"] = [{"id": v["id"], "name": f"{v.get('firstName','')} {v.get('lastName','')}", "email": v.get("email", "")} for v in vals]
-        except Exception:
-            pass
-
-        # Existing invoices
-        try:
-            r = client.get("/invoice", {"invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31", "fields": "id,invoiceNumber,amount,amountOutstanding,customer", "count": "5"})
-            vals = r.get("values", [])
-            if vals:
-                data["existing_invoices"] = [{"id": v["id"], "num": v.get("invoiceNumber"), "amount": v.get("amount"), "outstanding": v.get("amountOutstanding")} for v in vals]
-        except Exception:
-            pass
-
         lines = ["## Pre-fetched Reference Data (verified IDs from this sandbox)"]
-        lines.append("IMPORTANT: If entities below already exist, use them as-is. Do NOT modify them.")
         for k, v in data.items():
             lines.append(f"- {k}: {v}")
         return "\n".join(lines)
@@ -367,15 +310,11 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Step 1: Pre-fetch agent (GPT-4o-mini reads prompt, fetches relevant data)
-        ref_data = ""
-        try:
-            ref_data = await prefetch_for_task(request.prompt)
-            logger.info("Pre-fetch agent result: %d chars", len(ref_data))
-        except Exception as e:
-            logger.warning("Pre-fetch agent failed: %s", e)
+        # Pre-fetch reference data
+        ref_data = self._prefetch_reference_data()
+        logger.info("Pre-fetched reference data:\n%s", ref_data)
 
-        # Step 2: Extract file data (if files attached)
+        # Extract file data using Sonnet (if files attached)
         file_data = ""
         if request.files:
             try:
@@ -387,9 +326,8 @@ class TripletexAgent:
         # Build message with task + pre-fetched data + extracted file data
         content_parts = [
             {"type": "text", "text": f"## Task\n\n{request.prompt}"},
+            {"type": "text", "text": f"\n{ref_data}"},
         ]
-        if ref_data:
-            content_parts.append({"type": "text", "text": ref_data})
         if file_data:
             content_parts.append({"type": "text", "text": file_data})
 
