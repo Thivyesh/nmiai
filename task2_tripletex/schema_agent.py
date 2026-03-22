@@ -35,11 +35,12 @@ documentation for the main agent so it can execute without searching.
 {AVAILABLE_TEMPLATES}
 
 ## Your process
-1. Call get_task_workflow to understand what steps are needed
-2. For EACH endpoint in the workflow:
+1. READ the "Past Experience" section if present — it contains critical warnings from past failures
+2. Call get_task_workflow to understand what steps are needed
+3. For EACH endpoint in the workflow:
    a. Call get_payload_template — if it returns a template, include it in output
    b. If NO template exists: call lookup_api_docs to find the endpoint schema
-3. For any endpoint found via API docs, construct a template-like summary:
+4. For any endpoint found via API docs, construct a template-like summary:
    - Method + path
    - Required fields with types
    - Example payload JSON
@@ -57,6 +58,7 @@ Notes: <important details>
 STEP 2: ...
 
 ## Rules
+- If "Past Experience" has warnings, add them as WARNINGS in the relevant step's Notes
 - Be thorough — find ALL endpoints including obscure ones
 - For query-param endpoints (/:action), note that body should be "{{}}"
 - Include field types and which are required vs optional
