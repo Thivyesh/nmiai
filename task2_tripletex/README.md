@@ -43,25 +43,27 @@ PDF extraction and schema discovery run **in parallel** via `asyncio.gather`.
 |---|---|---|---|
 | Planner → Executor | Haiku + Sonnet | Rate limited (Tier 1, 50 RPM) | Burned through Anthropic limits |
 | Researcher → Executor | Haiku + Opus | Over-researched (14+ calls, timeouts) | Researcher couldn't stop |
-| Single agent | Opus | Good results but expensive + slow | Cost, switched to OpenAI |
+| Single agent | Opus | **Best results** — figured out complex tasks autonomously | Cost + Anthropic rate limits |
 | Single agent | GPT-4o | Researched but didn't execute | GPT-4o didn't follow through |
 | Single agent + phased prompt | GPT-4.1 | Better execution, still missed templates | Needed schema prep |
-| Schema agent + Executor | GPT-4.1 + GPT-4.1 | Current architecture, best results | Schema prep + focused execution |
+| Schema agent + Executor | GPT-4.1 + GPT-4.1 | Current architecture — compensates for GPT-4.1's weaker reasoning with pre-resolved schemas | Production setup due to rate limits/cost |
 
 ### Model-specific findings
 
 **Anthropic Claude (Haiku, Sonnet, Opus)**
-- Opus: best at autonomous reasoning, figured out complex workflows without templates
-- Sonnet: good balance but rate limited at Tier 1
+- **Opus produced the best competition scores** — it could reason through complex multi-step accounting tasks autonomously, without needing pre-resolved templates or phased prompts
+- Opus didn't need a schema agent — it figured out endpoints, field names, and workflows on its own
+- Sonnet: good balance but rate limited at Tier 1 (50 RPM)
 - Haiku: fast researcher but shallow reasoning
 - Uses `"type": "document"` for PDFs (Anthropic-specific format)
-- Rate limits were the main blocker (50 RPM at Tier 1)
+- Rate limits were the main blocker — forced us to move to OpenAI for production
 
 **OpenAI GPT-4.1**
-- Needs explicit phased prompts ("PLAN → EXECUTE → CONTINUE")
+- Needs explicit phased prompts ("PLAN → EXECUTE → CONTINUE") — without them, it researches endlessly and never calls POST/PUT
 - Won't execute POST/PUT unless the prompt says "You MUST execute"
-- Works well as an executor when templates are pre-resolved
+- Requires the full schema agent + template + experience pipeline to match Opus's autonomous performance
 - Uses `"type": "file"` for PDFs (OpenAI format — NOT `"type": "document"`)
+- The entire schema agent, experience checker, and template system exists because GPT-4.1 can't do what Opus does natively
 - Better availability and higher rate limits than Anthropic
 
 **OpenAI GPT-4.1-mini**
@@ -186,7 +188,11 @@ GPT-4.1 constructs JSON from memory with wrong field names (`debitAmount` instea
 
 ### Why 5 tools on the executor
 
-With 10+ tools, GPT-4.1 wastes calls on research tools instead of executing. Reducing to 5 tools (get/post/put/delete + template fallback) forces it to execute. The schema agent handles all research beforehand.
+With 10+ tools, GPT-4.1 wastes calls on research tools instead of executing. Reducing to 5 tools (get/post/put/delete + template fallback) forces it to execute. The schema agent handles all research beforehand. Note: Opus didn't need this restriction — it managed 10+ tools fine and knew when to stop researching and start executing.
+
+### Why the pipeline exists
+
+The entire pipeline (experience checker → schema agent → executor) is compensation for GPT-4.1's limitations compared to Opus. Opus could take a task prompt, figure out the right endpoints from API docs, construct correct payloads, and execute — all in a single agent with no pre-processing. GPT-4.1 needs each step prepared for it. If rate limits and cost weren't a factor, a single Opus agent with all tools would be the optimal architecture.
 
 ### Why asyncio.Lock for concurrent requests
 
