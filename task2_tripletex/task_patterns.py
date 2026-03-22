@@ -193,6 +193,31 @@ Keywords: prosjekt, project, Projekt, proyecto, projet, projeto
 
 ---
 
+## TIME TRACKING / PROJECT HOURS TASKS
+Keywords: timer, timeføring, hours, timesheet, registrer timer, Stunden, horas, heures, horas de projeto, project invoice, prosjektfaktura
+
+### Prerequisites (MUST check)
+| Check | How | Why |
+|-------|-----|-----|
+| Employee exists? | GET /employee?email=X | Need employee ID for timesheet |
+| Project exists? | GET /project?name=X | Need project ID |
+| Activity exists? | GET /project/projectActivity?projectId=N | Need activity ID, CREATE if missing |
+
+### Verified Workflow
+1. GET /employee, GET /project, GET /customer — find existing entities
+2. GET /project/projectActivity?projectId=N — find or create activity
+3. If activity not found: POST /project/projectActivity — {project: {"id": N}, activity: {name: "X", activityType: "PROJECT_SPECIFIC_ACTIVITY"}}
+4. POST /timesheet/entry — {project: {"id": N}, activity: {"id": N}, employee: {"id": N}, date: "YYYY-MM-DD", hours: N}
+5. If task asks to invoice the project: PUT /project/{id}/:invoice?invoiceDate=YYYY-MM-DD&sendToCustomer=false (query params, body="{}")
+
+### Verified Field Gotchas
+- Activity lookup: GET /project/projectActivity?projectId=N (NOT /project/activity)
+- Timesheet date is required
+- For project invoice: must have hours logged first
+- Hourly rates: POST /project/hourlyRates if rate is specified
+
+---
+
 ## CREDIT NOTE TASKS
 Keywords: kreditnota, credit note, nota de crédito, Gutschrift
 

@@ -73,6 +73,8 @@ _ENDPOINT_CORRECTIONS = {
     "/occupationCode": "/employee/employment/occupationCode",
     "/employment": "/employee/employment",
     "/cost": "/travelExpense/cost",
+    "/project/activity": "/project/projectActivity",
+    "/activity": "/project/projectActivity",
 }
 
 

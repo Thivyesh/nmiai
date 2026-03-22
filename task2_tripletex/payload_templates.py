@@ -282,4 +282,48 @@ PAYLOAD_TEMPLATES = {
         },
         "notes": "CRITICAL: ALL IDs are FLAT integers (vendorId, accountId, vatTypeId) NOT nested objects. externalId is REQUIRED on each orderLine. invoiceAmount is total INCLUDING VAT. vatTypeId: 1=25% inbound, 11=15%, 12=12%.",
     },
+    "POST /timesheet/entry": {
+        "description": "Register hours on a project activity",
+        "payload": {
+            "project": {"id": "<PROJECT_ID>"},
+            "activity": {"id": "<ACTIVITY_ID>"},
+            "employee": {"id": "<EMPLOYEE_ID>"},
+            "date": "<YYYY-MM-DD>",
+            "hours": "<HOURS>",
+        },
+        "notes": "Activity ID comes from GET /project/projectActivity?projectId=N or from creating one via POST /project/projectActivity. Date is required.",
+    },
+    "POST /project/projectActivity": {
+        "description": "Add activity to a project",
+        "payload": {
+            "project": {"id": "<PROJECT_ID>"},
+            "activity": {
+                "name": "<ACTIVITY_NAME>",
+                "activityType": "PROJECT_SPECIFIC_ACTIVITY",
+            },
+        },
+        "notes": "Creates an activity on a project. Use GET /project/projectActivity?projectId=N to check if activity already exists.",
+    },
+    "PUT /project/{id}/:invoice": {
+        "description": "Create invoice from project hours",
+        "payload": "NONE — use query params only",
+        "url_format": "/project/<PROJECT_ID>/:invoice?invoiceDate=<DATE>&sendToCustomer=false",
+        "notes": "Invoices a project based on logged hours. Pass body='{}'. All params in URL.",
+    },
+    "POST /project/hourlyRates": {
+        "description": "Set hourly rates for a project",
+        "payload": {
+            "project": {"id": "<PROJECT_ID>"},
+            "startDate": "<YYYY-MM-DD>",
+            "hourlyRateModel": "TYPE_PROJECT_SPECIFIC_HOURLY_RATES",
+            "projectSpecificRates": [
+                {
+                    "hourlyRate": "<RATE>",
+                    "employee": {"id": "<EMPLOYEE_ID>"},
+                    "activity": {"id": "<ACTIVITY_ID>"},
+                }
+            ],
+        },
+        "notes": "Set before invoicing project. hourlyRateModel can be TYPE_PROJECT_SPECIFIC_HOURLY_RATES or TYPE_FIXED_HOURLY_RATE.",
+    },
 }
