@@ -110,6 +110,7 @@ def _bm25_search(query: str, top_k: int = 5) -> list[dict]:
                         "successful_calls^2",
                         "failed_calls_with_fixes^3",
                         "correct_templates^2",
+                        "competition_notes^4",
                         "tags^2",
                     ],
                     "type": "most_fields",
@@ -129,10 +130,15 @@ def _format_trace(t: dict) -> str:
     entry = f"### Past task (errors: {errors})\n"
     entry += f"Task: {prompt}\n"
 
-    # Show lesson learned first (most useful)
+    # Show competition notes first (most valuable)
+    comp_notes = t.get("competition_notes", "")
+    if comp_notes:
+        entry += f"⚠️ COMPETITION LESSON: {comp_notes[:300]}\n"
+
+    # Show lesson learned
     lesson = t.get("lesson_learned", "")
     if lesson:
-        entry += f"Lesson: {lesson[:300]}\n"
+        entry += f"Lesson: {lesson[:200]}\n"
 
     # Enriched format (has fixes)
     successful = t.get("successful_calls", "")
