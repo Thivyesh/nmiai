@@ -158,13 +158,11 @@ class TripletexAgent:
                 })
                 parts.append({"type": "text", "text": f"[Above image: {f.filename}]"})
             elif f.mime_type == "application/pdf":
-                # Send PDF as document for Claude to read
                 parts.append({
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": f.content_base64,
+                    "type": "file",
+                    "file": {
+                        "filename": f.filename,
+                        "file_data": f"data:application/pdf;base64,{f.content_base64}",
                     },
                 })
                 parts.append({"type": "text", "text": f"[Above PDF: {f.filename}]"})
