@@ -89,23 +89,37 @@ def get_payload_template(endpoint: str) -> str:
     # Try exact match first
     template = PAYLOAD_TEMPLATES.get(endpoint)
 
-    # Try fuzzy match
+    # Try fuzzy match — prefer longest matching key to avoid "POST /project" matching "POST /project/projectActivity"
     if not template:
         endpoint_lower = endpoint.lower()
+        best_key = None
+        best_len = 0
         for key, val in PAYLOAD_TEMPLATES.items():
-            if endpoint_lower in key.lower() or key.lower() in endpoint_lower:
-                template = val
-                endpoint = key
+            key_lower = key.lower()
+            if endpoint_lower == key_lower:
+                best_key = key
                 break
+            if key_lower in endpoint_lower or endpoint_lower in key_lower:
+                if len(key) > best_len:
+                    best_key = key
+                    best_len = len(key)
+        if best_key:
+            template = PAYLOAD_TEMPLATES[best_key]
+            endpoint = best_key
 
-    # Try partial match on the path part
+    # Try partial match on the path part — also prefer longest
     if not template:
+        best_key = None
+        best_len = 0
         for key, val in PAYLOAD_TEMPLATES.items():
             path = key.split(" ", 1)[-1] if " " in key else key
             if path in endpoint or endpoint in path:
-                template = val
-                endpoint = key
-                break
+                if len(key) > best_len:
+                    best_key = key
+                    best_len = len(key)
+        if best_key:
+            template = PAYLOAD_TEMPLATES[best_key]
+            endpoint = best_key
 
     if not template:
         available = "\n".join(f"  - {k}" for k in PAYLOAD_TEMPLATES)
