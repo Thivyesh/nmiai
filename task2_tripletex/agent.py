@@ -251,7 +251,57 @@ class TripletexAgent:
         except Exception:
             pass
 
+        # Division (for salary tasks)
+        try:
+            r = client.get("/division", {"fields": "id,name", "count": "1"})
+            vals = r.get("values", [])
+            if vals:
+                data["division_id"] = vals[0]["id"]
+                data["division_exists"] = True
+            else:
+                data["division_exists"] = False
+        except Exception:
+            data["division_exists"] = False
+
+        # Salary types
+        try:
+            r = client.get("/salary/type", {"fields": "id,number,name", "count": "10"})
+            vals = r.get("values", [])
+            key_types = [v for v in vals if v.get("number") in ("2000", "2001", "2002")]
+            if key_types:
+                data["salary_types"] = [{"id": v["id"], "num": v["number"], "name": v["name"]} for v in key_types]
+        except Exception:
+            pass
+
+        # Existing customers (first 5)
+        try:
+            r = client.get("/customer", {"fields": "id,name,organizationNumber", "count": "5"})
+            vals = r.get("values", [])
+            if vals:
+                data["existing_customers"] = [{"id": v["id"], "name": v.get("name", "")} for v in vals]
+        except Exception:
+            pass
+
+        # Existing employees (first 5)
+        try:
+            r = client.get("/employee", {"fields": "id,firstName,lastName,email", "count": "5"})
+            vals = r.get("values", [])
+            if vals:
+                data["existing_employees"] = [{"id": v["id"], "name": f"{v.get('firstName','')} {v.get('lastName','')}", "email": v.get("email", "")} for v in vals]
+        except Exception:
+            pass
+
+        # Existing invoices
+        try:
+            r = client.get("/invoice", {"invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31", "fields": "id,invoiceNumber,amount,amountOutstanding,customer", "count": "5"})
+            vals = r.get("values", [])
+            if vals:
+                data["existing_invoices"] = [{"id": v["id"], "num": v.get("invoiceNumber"), "amount": v.get("amount"), "outstanding": v.get("amountOutstanding")} for v in vals]
+        except Exception:
+            pass
+
         lines = ["## Pre-fetched Reference Data (verified IDs from this sandbox)"]
+        lines.append("IMPORTANT: If entities below already exist, use them as-is. Do NOT modify them.")
         for k, v in data.items():
             lines.append(f"- {k}: {v}")
         return "\n".join(lines)
