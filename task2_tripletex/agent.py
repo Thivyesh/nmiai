@@ -15,6 +15,7 @@ from langgraph.prebuilt import create_react_agent
 
 from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.pdf_extractor import extract_file_data
+from task2_tripletex.prefetch_agent import prefetch_for_task
 from task2_tripletex.tools import (
     EXECUTOR_TOOLS,
     PLANNER_TOOLS,
@@ -361,11 +362,15 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Pre-fetch reference data
-        ref_data = self._prefetch_reference_data()
-        logger.info("Pre-fetched reference data:\n%s", ref_data)
+        # Step 1: Pre-fetch agent (GPT-4o-mini reads prompt, fetches relevant data)
+        ref_data = ""
+        try:
+            ref_data = await prefetch_for_task(request.prompt)
+            logger.info("Pre-fetch agent result: %d chars", len(ref_data))
+        except Exception as e:
+            logger.warning("Pre-fetch agent failed: %s", e)
 
-        # Extract file data using Sonnet (if files attached)
+        # Step 2: Extract file data (if files attached)
         file_data = ""
         if request.files:
             try:
@@ -377,8 +382,9 @@ class TripletexAgent:
         # Build message with task + pre-fetched data + extracted file data
         content_parts = [
             {"type": "text", "text": f"## Task\n\n{request.prompt}"},
-            {"type": "text", "text": f"\n{ref_data}"},
         ]
+        if ref_data:
+            content_parts.append({"type": "text", "text": ref_data})
         if file_data:
             content_parts.append({"type": "text", "text": file_data})
 
