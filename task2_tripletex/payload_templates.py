@@ -171,8 +171,9 @@ PAYLOAD_TEMPLATES = {
             "count": 1,
             "unitPriceExcludingVatCurrency": "<AMOUNT>",
             "date": "<YYYY-MM-DD>",
+            "isChargeable": True,
         },
-        "notes": "date and product are REQUIRED for invoiceable lines. Create a product first (POST /product), then reference it here. For milestone invoicing: set unitPriceExcludingVatCurrency to the milestone amount (e.g. 50% of total). Then use PUT /project/{id}/:invoice to invoice.",
+        "notes": "isChargeable MUST be true for invoiceable lines. date and product are also REQUIRED. Create a product first (POST /product). For milestone: set unitPriceExcludingVatCurrency to the milestone amount (e.g. 50% of total). Then use PUT /project/{id}/:invoice.",
     },
     "POST /contact": {
         "description": "Create contact on customer",
