@@ -35,14 +35,16 @@ The competition pre-loads data — find it so the main agent doesn't have to sea
 ## What to fetch (do ALL that apply):
 1. ALWAYS: GET /department?fields=id,name&count=1
 2. ALWAYS: GET /ledger/account?number=1920&fields=id,version,bankAccountNumber
-3. If task mentions an employee name/email: GET /employee?email=X or GET /employee?firstName=X&fields=id,firstName,lastName,email
-4. If employee found: GET /employee/employment?employeeId=N&fields=id,startDate,division
-5. If task mentions a customer name/org: GET /customer?name=X or GET /customer?organizationNumber=X&fields=id,name,organizationNumber
-6. If task mentions invoices: GET /invoice?invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&customerId=N&fields=id,invoiceNumber,amount,amountOutstanding,comment
-7. If task involves salary: GET /salary/type?fields=id,number,name AND GET /division?fields=id,name&count=1
-8. If task involves vouchers: GET /ledger/voucherType?fields=id,name&count=5
-9. If task involves travel: GET /travelExpense/paymentType?fields=id,description
-10. If task involves payments: GET /invoice/paymentType?fields=id,description
+3. If task mentions ANY account numbers (e.g., 6590, 1500, 3400, 6010, 1720): GET /ledger/account?number=NNNN&fields=id,number,name for EACH one
+4. If task mentions an employee name/email: GET /employee?email=X&fields=id,firstName,lastName,email
+5. If employee found: GET /employee/employment?employeeId=N&fields=id,startDate,division
+6. If task mentions a customer/supplier name/org: GET /customer?organizationNumber=X&fields=id,name,organizationNumber OR GET /supplier?organizationNumber=X
+7. If task mentions invoices: GET /invoice?invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&fields=id,invoiceNumber,amount,amountOutstanding,comment&count=10
+8. If task involves salary: GET /salary/type?fields=id,number,name AND GET /division?fields=id,name&count=1
+9. If task involves vouchers: GET /ledger/voucherType?fields=id,name&count=5
+10. If task involves travel: GET /travelExpense/paymentType?fields=id,description
+11. If task involves payments: GET /invoice/paymentType?fields=id,description
+12. If task involves incoming/supplier invoice: GET /ledger/vatType?fields=id,number,name&count=10
 
 ## Output format
 Return a structured summary:
