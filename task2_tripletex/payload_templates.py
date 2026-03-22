@@ -255,4 +255,31 @@ PAYLOAD_TEMPLATES = {
         },
         "notes": "Year must be current (2026). Employee must have employment with division. Get salary type IDs from GET /salary/type.",
     },
+    "POST /incomingInvoice": {
+        "description": "Register incoming/supplier invoice",
+        "url_format": "/incomingInvoice?sendTo=ledger",
+        "payload": {
+            "invoiceHeader": {
+                "vendorId": "<SUPPLIER_ID_FLAT_INTEGER>",
+                "invoiceDate": "<YYYY-MM-DD>",
+                "dueDate": "<YYYY-MM-DD>",
+                "currencyId": 1,
+                "invoiceAmount": "<TOTAL_INCL_VAT>",
+                "description": "<DESCRIPTION>",
+                "invoiceNumber": "<INVOICE_NUMBER>",
+            },
+            "orderLines": [
+                {
+                    "externalId": "line1",
+                    "row": 1,
+                    "description": "<LINE_DESCRIPTION>",
+                    "accountId": "<ACCOUNT_ID_FLAT_INTEGER>",
+                    "amountInclVat": "<AMOUNT_INCL_VAT>",
+                    "vatTypeId": 1,
+                    "count": 1,
+                }
+            ],
+        },
+        "notes": "CRITICAL: ALL IDs are FLAT integers (vendorId, accountId, vatTypeId) NOT nested objects. externalId is REQUIRED on each orderLine. invoiceAmount is total INCLUDING VAT. vatTypeId: 1=25% inbound, 11=15%, 12=12%.",
+    },
 }
