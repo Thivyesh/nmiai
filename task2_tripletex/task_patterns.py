@@ -192,9 +192,10 @@ Keywords: prosjekt, project, Projekt, proyecto, projet, projeto, fixed price, fa
 ### Verified Workflow (fixed price project with invoice)
 1. GET /employee?email=X — find project manager (CREATE if needed)
 2. POST /customer (if needed) — with organizationNumber
-3. POST /project — {name, startDate, customer: {"id": N}, projectManager: {"id": N}, isFixedPrice: true}
-4. POST /project/orderline — add line item with fixed price amount
-5. PUT /project/{id}/:invoice — invoice the project (for milestone: set amount in orderline to milestone %)
+3. POST /product — create product for the fixed-price line item
+4. POST /project — {name, startDate, customer: {"id": N}, projectManager: {"id": N}, isFixedPrice: true}
+5. POST /project/orderline — add line item with product, amount, and date (product REQUIRED for invoiceable lines)
+6. PUT /project/{id}/:invoice — invoice the project (for milestone: set amount in orderline to milestone %)
 
 ### Verified Field Gotchas
 - projectManager usually required (use account owner ID if no specific manager named)
