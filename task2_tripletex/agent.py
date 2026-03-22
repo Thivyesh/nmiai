@@ -207,14 +207,25 @@ class TripletexAgent:
         except Exception:
             pass
 
-        # Bank account (1920)
+        # Bank account (1920) — auto-set if empty (required for invoices)
         try:
             r = client.get("/ledger/account", {"number": "1920", "fields": "id,version,bankAccountNumber"})
             vals = r.get("values", [])
             if vals:
-                data["account_1920_id"] = vals[0]["id"]
-                data["account_1920_version"] = vals[0].get("version", 0)
-                data["account_1920_bank"] = vals[0].get("bankAccountNumber", "")
+                acct = vals[0]
+                data["account_1920_id"] = acct["id"]
+                data["account_1920_version"] = acct.get("version", 0)
+                bank = acct.get("bankAccountNumber", "")
+                data["account_1920_bank"] = bank
+                if not bank:
+                    # Set bank account so invoices can be created
+                    put_r = client.put(
+                        f"/ledger/account/{acct['id']}",
+                        {"id": acct["id"], "version": acct.get("version", 0), "bankAccountNumber": "86011117947"},
+                    )
+                    if not put_r.get("_error"):
+                        data["account_1920_bank"] = "86011117947 (auto-set)"
+                        logger.info("Auto-set bank account on 1920")
         except Exception:
             pass
 
