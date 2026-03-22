@@ -48,7 +48,7 @@ def get_task_workflow(task_description: str) -> str:
 
     for title, content in _SECTIONS.items():
         title_lower = title.lower()
-        content_lower = content.lower()[:200]
+        content_lower = content.lower()[:500]
         score = 0
         for word in search.split():
             if len(word) < 3:

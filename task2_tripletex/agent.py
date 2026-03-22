@@ -84,6 +84,7 @@ RECOVER: get_payload_template (re-check template on error), lookup_api_docs
 ## Rules
 - Copy JSON from templates. Do NOT construct from memory. Do NOT invent field names.
 - EXACT values from the prompt. Never modify names, emails, amounts.
+- Account lookups: GET /ledger/account?number=NNNN (NOT /account). Always use /ledger/account.
 - Query-param endpoints (payment, credit note, entitlements): params in URL, body="{}".
 - Do NOT modify existing entities. Use their ID as-is. Do NOT update/change fields.
   The competition pre-loads entities — modifying them breaks checks.

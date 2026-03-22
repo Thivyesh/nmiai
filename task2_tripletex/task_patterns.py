@@ -232,7 +232,7 @@ Keywords: leverandør, supplier, Lieferant, proveedor, fournisseur, fornecedor
 ---
 
 ## VOUCHER / DIMENSION TASKS
-Keywords: bilag, voucher, dimensjon, dimension, postering, Buchung, journal entry, lançamento contabilístico
+Keywords: bilag, voucher, dimensjon, dimension, postering, Buchung, journal entry, lançamento contabilístico, avskrivning, depreciation, Abschreibung, depreciación, månedslukking, month-end, periodelukking, closing, bokfør, periodisering, accrual
 
 ### Prerequisites (MUST check)
 | Check | How | Why |

@@ -64,20 +64,36 @@ def _get_client() -> TripletexClient:
     return _client
 
 
+_ENDPOINT_CORRECTIONS = {
+    "/account": "/ledger/account",
+    "/voucherType": "/ledger/voucherType",
+    "/voucher": "/ledger/voucher",
+    "/vatType": "/ledger/vatType",
+    "/paymentType": "/invoice/paymentType",
+    "/occupationCode": "/employee/employment/occupationCode",
+    "/employment": "/employee/employment",
+    "/cost": "/travelExpense/cost",
+}
+
+
 @tool
 def tripletex_get(endpoint: str, params: str = "{}") -> str:
     """GET a Tripletex API endpoint.
 
     Args:
-        endpoint: API path, e.g. "/employee", "/customer", "/invoice".
+        endpoint: API path, e.g. "/ledger/account", "/employee", "/customer", "/invoice".
         params: JSON string of query parameters, e.g. '{"fields": "id,name", "count": "10"}'.
 
     Returns:
         JSON response as string.
     """
+    # Auto-correct common endpoint mistakes
+    ep = endpoint.rstrip("/")
+    if ep in _ENDPOINT_CORRECTIONS:
+        ep = _ENDPOINT_CORRECTIONS[ep]
     client = _get_client()
     parsed_params = json.loads(params) if params else None
-    result = client.get(endpoint, parsed_params)
+    result = client.get(ep, parsed_params)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
