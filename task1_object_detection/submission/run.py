@@ -22,7 +22,7 @@ _original_torch_load = torch.load
 torch.load = lambda *a, **kw: _original_torch_load(*a, **{**kw, "weights_only": False})
 import torch.nn as nn
 from torchvision import transforms
-from torchvision.models import mobilenet_v3_small
+from torchvision.models import efficientnet_b1
 from PIL import Image
 from ultralytics import YOLO
 
@@ -56,7 +56,7 @@ def load_classifiers(device):
             classes = json.load(f)
 
         n_classes = len(classes)
-        model = mobilenet_v3_small(weights=None)
+        model = efficientnet_b1(weights=None)
         model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, n_classes)
         model.load_state_dict(torch.load(str(model_path), map_location=device))
         model = model.to(device)
@@ -129,7 +129,7 @@ def main():
     print(f"  Loaded: {list(classifiers.keys())}")
 
     cls_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((240, 240)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])

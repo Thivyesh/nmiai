@@ -27,7 +27,7 @@ fi
 cp "$DETECTOR_WEIGHTS" "$BUILD_DIR/detector.pt"
 
 # Copy distilled classifiers
-for group_dir in "$TASK_ROOT/output/models/distilled"/*/; do
+for group_dir in "$TASK_ROOT/output/models/distilled_v2_effb1"/*/; do
     group_name=$(basename "$group_dir")
     mkdir -p "$BUILD_DIR/classifiers/$group_name"
     cp "$group_dir/best.pt" "$BUILD_DIR/classifiers/$group_name/best.pt"
