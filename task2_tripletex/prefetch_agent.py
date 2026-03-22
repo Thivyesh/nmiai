@@ -71,7 +71,7 @@ REFERENCE DATA:
 async def prefetch_for_task(prompt: str, files: list | None = None) -> str:
     """Run the pre-fetch agent to gather context for the main agent."""
     llm = ChatOpenAI(
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
         temperature=0,
         max_retries=2,
         timeout=20,

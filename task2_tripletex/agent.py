@@ -106,10 +106,10 @@ class TripletexAgent:
     _lock = asyncio.Lock()
 
     def __init__(self):
-        # Single agent: GPT-4o
+        # Single agent: GPT-4.1 (latest, best instruction following, cheaper than 4o)
         from langchain_openai import ChatOpenAI
         self.agent_llm = ChatOpenAI(
-            model="gpt-4o",
+            model="gpt-4.1",
             temperature=0,
             max_retries=2,
             timeout=60,
