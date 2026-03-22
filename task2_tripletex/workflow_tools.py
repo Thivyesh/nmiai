@@ -38,6 +38,63 @@ def _build_sections() -> dict[str, str]:
 
 _SECTIONS = _build_sections()
 
+# Build BM25 index over workflow sections
+_workflow_titles: list[str] = list(_SECTIONS.keys())
+_workflow_corpus: list[list[str]] = []
+for _wt in _workflow_titles:
+    _text = f"{_wt} {_SECTIONS[_wt][:500]}".lower()
+    _workflow_corpus.append(_text.split())
+_workflow_bm25 = BM25Okapi(_workflow_corpus) if _workflow_corpus else None
+
+# Semantic index for workflows (lazy-built)
+_workflow_embeddings: np.ndarray | None = None
+
+
+def _build_workflow_embeddings():
+    global _workflow_embeddings
+    if _workflow_embeddings is not None:
+        return
+    texts = [f"{t} {_SECTIONS[t][:500]}" for t in _workflow_titles]
+    try:
+        resp = requests.post(f"{TEI_URL}/embed", json={"inputs": texts}, timeout=5)
+        resp.raise_for_status()
+        _workflow_embeddings = np.array(resp.json())
+    except Exception:
+        pass
+
+
+def _hybrid_workflow_search(query: str, top_k: int = 1) -> list[tuple[str, float]]:
+    """Search workflow sections using hybrid BM25 + semantic."""
+    results = {}
+
+    # BM25
+    if _workflow_bm25:
+        tokens = query.lower().split()
+        scores = _workflow_bm25.get_scores(tokens)
+        for i, score in enumerate(scores):
+            if score > 0:
+                results[_workflow_titles[i]] = score
+
+    # Semantic
+    _build_workflow_embeddings()
+    if _workflow_embeddings is not None:
+        try:
+            resp = requests.post(f"{TEI_URL}/embed", json={"inputs": [query[:500]]}, timeout=5)
+            resp.raise_for_status()
+            query_emb = np.array(resp.json()[0])
+            norms = np.linalg.norm(_workflow_embeddings, axis=1) * np.linalg.norm(query_emb)
+            norms = np.where(norms == 0, 1, norms)
+            sims = np.dot(_workflow_embeddings, query_emb) / norms
+            for i, sim in enumerate(sims):
+                if sim > 0.3:
+                    key = _workflow_titles[i]
+                    results[key] = results.get(key, 0) + sim * 5
+        except Exception:
+            pass
+
+    ranked = sorted(results.items(), key=lambda x: x[1], reverse=True)
+    return ranked[:top_k]
+
 
 @tool
 def get_task_workflow(task_description: str) -> str:
@@ -52,34 +109,20 @@ def get_task_workflow(task_description: str) -> str:
     Returns:
         The workflow steps and prerequisites for this task type.
     """
-    search = task_description.lower()
-    best_match = None
-    best_score = 0
+    ranked = _hybrid_workflow_search(task_description)
 
-    for title, content in _SECTIONS.items():
-        title_lower = title.lower()
-        content_lower = content.lower()[:500]
-        score = 0
-        for word in search.split():
-            if len(word) < 3:
-                continue
-            if word in title_lower:
-                score += 3
-            if word in content_lower:
-                score += 1
-        if score > best_score:
-            best_score = score
-            best_match = (title, content)
-
-    if not best_match or best_score < 2:
+    if not ranked or ranked[0][1] < 0.5:
         return f"No workflow found for '{task_description}'. Available: " + ", ".join(
             t for t in _SECTIONS if "UNIVERSAL" not in t and "MULTILINGUAL" not in t
         )
 
+    best_title = ranked[0][0]
+    content = _SECTIONS[best_title]
+
     # Also include universal prerequisites
     universal = _SECTIONS.get("UNIVERSAL PREREQUISITES (check for EVERY task)", "")
 
-    return f"{universal}\n\n---\n\n{best_match[1]}"
+    return f"{universal}\n\n---\n\n{content}"
 
 
 # --- Payload template search (hybrid BM25 + semantic) ---
