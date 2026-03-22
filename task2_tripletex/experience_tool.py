@@ -129,6 +129,11 @@ def _format_trace(t: dict) -> str:
     entry = f"### Past task (errors: {errors})\n"
     entry += f"Task: {prompt}\n"
 
+    # Show lesson learned first (most useful)
+    lesson = t.get("lesson_learned", "")
+    if lesson:
+        entry += f"Lesson: {lesson[:300]}\n"
+
     # Enriched format (has fixes)
     successful = t.get("successful_calls", "")
     failed_with_fixes = t.get("failed_calls_with_fixes", "")
@@ -157,15 +162,21 @@ def _format_trace(t: dict) -> str:
 
 @tool
 def search_past_experience(task_description: str) -> str:
-    """Search past task executions to learn what worked and what failed.
+    """Search past task executions to learn from mistakes and copy successes.
 
-    Uses hybrid BM25 + semantic search. Works with any language.
+    Returns similar past tasks showing:
+    - What API calls worked (copy these approaches)
+    - What failed and HOW TO FIX IT (avoid these mistakes)
+    - Correct payload templates for failed endpoints
+
+    Query in English for best results.
 
     Args:
-        task_description: Description of the task in any language.
+        task_description: English description, e.g. "voucher posting",
+            "salary payroll", "invoice payment", "travel expense".
 
     Returns:
-        Past experiences with what worked (200 OK) and what failed (errors).
+        Past experiences with lessons learned, fixes, and correct templates.
     """
     # Hybrid: BM25 + semantic, deduplicate by trace_id
     seen = set()
