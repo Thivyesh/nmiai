@@ -169,8 +169,9 @@ PAYLOAD_TEMPLATES = {
             "description": "<DESCRIPTION>",
             "count": 1,
             "unitPriceExcludingVatCurrency": "<AMOUNT>",
+            "date": "<YYYY-MM-DD>",
         },
-        "notes": "For milestone invoicing: set unitPriceExcludingVatCurrency to the milestone amount (e.g. 50% of total). Then use PUT /project/{id}/:invoice to invoice.",
+        "notes": "date is REQUIRED. For milestone invoicing: set unitPriceExcludingVatCurrency to the milestone amount (e.g. 50% of total). Then use PUT /project/{id}/:invoice to invoice.",
     },
     "POST /contact": {
         "description": "Create contact on customer",

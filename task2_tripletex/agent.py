@@ -15,6 +15,7 @@ from langgraph.prebuilt import create_react_agent
 
 from task2_tripletex.models import SolveRequest, SolveResponse
 from task2_tripletex.pdf_extractor import extract_file_data
+from task2_tripletex.experience_checker import check_experience
 from task2_tripletex.schema_agent import discover_schemas
 from task2_tripletex.tools import (
     TripletexClient,
@@ -312,7 +313,12 @@ class TripletexAgent:
         if langfuse_handler:
             config["callbacks"] = [langfuse_handler]
 
-        # Pre-fetch reference data
+        # Step 1: Check past experience (no LLM, instant)
+        experience_data = check_experience(request.prompt)
+        if experience_data:
+            logger.info("Experience warnings: %d chars", len(experience_data))
+
+        # Step 2: Pre-fetch reference data
         ref_data = self._prefetch_reference_data()
         logger.info("Pre-fetched reference data:\n%s", ref_data)
 
@@ -325,19 +331,24 @@ class TripletexAgent:
             except Exception as e:
                 logger.warning("File extraction failed: %s", e)
 
-        # Schema discovery: find all endpoint templates needed for this task
+        # Step 4: Schema discovery — pass experience warnings so it can avoid known errors
+        schema_input = ref_data
+        if experience_data:
+            schema_input += experience_data
         schema_data = ""
         try:
-            schema_data = await discover_schemas(request.prompt, ref_data, file_data)
+            schema_data = await discover_schemas(request.prompt, schema_input, file_data)
             logger.info("Schema discovery: %d chars", len(schema_data))
         except Exception as e:
             logger.warning("Schema discovery failed: %s", e)
 
-        # Build message with task + pre-fetched data + schemas + extracted file data
+        # Build message with task + all context for executor
         content_parts = [
             {"type": "text", "text": f"## Task\n\n{request.prompt}"},
             {"type": "text", "text": f"\n{ref_data}"},
         ]
+        if experience_data:
+            content_parts.append({"type": "text", "text": experience_data})
         if schema_data:
             content_parts.append({"type": "text", "text": schema_data})
         if file_data:
