@@ -17,6 +17,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+# ultralytics 8.1.0 .pt files need weights_only=False with torch >=2.6
+_original_torch_load = torch.load
+torch.load = lambda *a, **kw: _original_torch_load(*a, **{**kw, "weights_only": False})
 import torch.nn as nn
 from torchvision import transforms
 from torchvision.models import mobilenet_v3_small
@@ -67,20 +70,45 @@ def load_classifiers(device):
     return classifiers
 
 
-def classify_crop(crop, group_name, classifiers, transform, device):
-    """Classify a crop using its group's distilled classifier."""
-    if group_name not in classifiers:
-        return 0, 0.5
+def classify_crops_batched(crops, group_indices, classifiers, transform, device, batch_size=64):
+    """Classify all crops in batches, grouped by super-category.
 
-    clf = classifiers[group_name]
-    tensor = transform(crop).unsqueeze(0).to(device)
-    with torch.no_grad():
-        logits = clf["model"](tensor)
-        probs = torch.softmax(logits, dim=1)
-        pred_idx = probs.argmax(dim=1).item()
-        confidence = probs[0, pred_idx].item()
+    Returns list of (category_id, confidence) for each crop.
+    """
+    results = [None] * len(crops)
 
-    return clf["classes"][pred_idx], confidence
+    # Group crops by their super-category
+    group_to_indices = {}
+    for i, group_name in enumerate(group_indices):
+        group_to_indices.setdefault(group_name, []).append(i)
+
+    for group_name, indices in group_to_indices.items():
+        if group_name not in classifiers:
+            for i in indices:
+                results[i] = (0, 0.5)
+            continue
+
+        clf = classifiers[group_name]
+        model = clf["model"]
+        classes = clf["classes"]
+
+        # Process in batches
+        for batch_start in range(0, len(indices), batch_size):
+            batch_indices = indices[batch_start:batch_start + batch_size]
+            batch_tensors = torch.stack([
+                transform(crops[i]) for i in batch_indices
+            ]).to(device)
+
+            with torch.no_grad():
+                logits = model(batch_tensors)
+                probs = torch.softmax(logits, dim=1)
+                pred_indices = probs.argmax(dim=1)
+                confidences = probs.gather(1, pred_indices.unsqueeze(1)).squeeze(1)
+
+            for j, idx in enumerate(batch_indices):
+                results[idx] = (classes[pred_indices[j].item()], confidences[j].item())
+
+    return results
 
 
 def main():
@@ -128,39 +156,42 @@ def main():
         img = Image.open(img_path).convert("RGB")
         boxes = results[0].boxes
 
+        # Collect all crops for batched classification
+        crops = []
+        group_names = []
+        det_data = []
+
         for i in range(len(boxes)):
             x1, y1, x2, y2 = boxes.xyxy[i].tolist()
             det_conf = float(boxes.conf[i].item())
             det_cls = int(boxes.cls[i].item())
-
-            w = x2 - x1
-            h = y2 - y1
+            w, h = x2 - x1, y2 - y1
             if w < 10 or h < 10:
                 continue
 
-            # Get group name from detector class
             group_name = GROUP_NAMES[det_cls] if det_cls < len(GROUP_NAMES) else "other"
-
-            # Step 2: Crop with padding and classify within group
-            pad_x = w * 0.05
-            pad_y = h * 0.05
+            pad_x, pad_y = w * 0.05, h * 0.05
             crop = img.crop((
-                max(0, int(x1 - pad_x)),
-                max(0, int(y1 - pad_y)),
-                min(img.width, int(x2 + pad_x)),
-                min(img.height, int(y2 + pad_y)),
+                max(0, int(x1 - pad_x)), max(0, int(y1 - pad_y)),
+                min(img.width, int(x2 + pad_x)), min(img.height, int(y2 + pad_y)),
             ))
+            crops.append(crop)
+            group_names.append(group_name)
+            det_data.append((x1, y1, w, h, det_conf))
 
-            cat_id, cls_conf = classify_crop(
-                crop, group_name, classifiers, cls_transform, device
+        # Step 2: Batched classification by group
+        if crops:
+            cls_results = classify_crops_batched(
+                crops, group_names, classifiers, cls_transform, device
             )
-
-            predictions.append({
-                "image_id": image_id,
-                "category_id": int(cat_id),
-                "bbox": [round(x1, 1), round(y1, 1), round(w, 1), round(h, 1)],
-                "score": round(det_conf * cls_conf, 3),
-            })
+            for j, (cat_id, cls_conf) in enumerate(cls_results):
+                x1, y1, w, h, det_conf = det_data[j]
+                predictions.append({
+                    "image_id": image_id,
+                    "category_id": int(cat_id),
+                    "bbox": [round(x1, 1), round(y1, 1), round(w, 1), round(h, 1)],
+                    "score": round(det_conf * cls_conf, 3),
+                })
 
         if (img_idx + 1) % 50 == 0:
             print(f"  {img_idx + 1}/{len(image_files)} images, {len(predictions)} predictions")
