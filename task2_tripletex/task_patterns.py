@@ -176,20 +176,31 @@ Keywords: reiseregning, travel expense, Reisekostenabrechnung, nota de gastos, n
 ---
 
 ## PROJECT TASKS
-Keywords: prosjekt, project, Projekt, proyecto, projet, projeto
+Keywords: prosjekt, project, Projekt, proyecto, projet, projeto, fixed price, fastpris, milestone, milepæl
 
 ### Prerequisites (MUST check)
 | Check | How | Why |
 |-------|-----|-----|
-| Customer exists? | GET /customer?name=X | Must CREATE if not found |
-| Employee for manager | GET /employee?fields=id&count=1 | projectManager is expected |
+| Customer exists? | GET /customer?name=X or ?organizationNumber=N | Must CREATE if not found |
+| Project manager | GET /employee?email=X | Must CREATE if not found. projectManager is required |
 
-### Verified Workflow
-1. POST /customer (if needed)
-2. POST /project — {name, startDate, customer: {"id": N}, projectManager: {"id": N}}
+### Verified Workflow (simple project)
+1. GET /employee?email=X — find project manager (CREATE if needed)
+2. POST /customer (if needed) — with organizationNumber
+3. POST /project — {name, startDate, customer: {"id": N}, projectManager: {"id": N}}
+
+### Verified Workflow (fixed price project with invoice)
+1. GET /employee?email=X — find project manager (CREATE if needed)
+2. POST /customer (if needed) — with organizationNumber
+3. POST /project — {name, startDate, customer: {"id": N}, projectManager: {"id": N}, isFixedPrice: true}
+4. POST /project/orderline — add line item with fixed price amount
+5. PUT /project/{id}/:invoice — invoice the project (for milestone: set amount in orderline to milestone %)
 
 ### Verified Field Gotchas
 - projectManager usually required (use account owner ID if no specific manager named)
+- For fixed price: set isFixedPrice: true on POST /project
+- For milestone invoice (e.g. "50%"): create orderline with 50% of total amount, then invoice
+- Project orderline needs: project {"id": N}, description, unitPriceExcludingVatCurrency, count: 1
 
 ---
 

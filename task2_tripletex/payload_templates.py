@@ -152,14 +152,25 @@ PAYLOAD_TEMPLATES = {
         "notes": "Separate endpoint from /customer.",
     },
     "POST /project": {
-        "description": "Create project",
+        "description": "Create project (set isFixedPrice for fixed-price projects)",
         "payload": {
             "name": "<NAME>",
             "startDate": "<YYYY-MM-DD>",
             "customer": {"id": "<CUSTOMER_ID>"},
             "projectManager": {"id": "<EMPLOYEE_ID>"},
+            "isFixedPrice": False,
         },
-        "notes": "projectManager usually required.",
+        "notes": "projectManager required — find by email or create. Set isFixedPrice: true for fixed-price projects. Omit isFixedPrice or set false for hourly projects.",
+    },
+    "POST /project/orderline": {
+        "description": "Add order line to project (for fixed-price amount or milestone)",
+        "payload": {
+            "project": {"id": "<PROJECT_ID>"},
+            "description": "<DESCRIPTION>",
+            "count": 1,
+            "unitPriceExcludingVatCurrency": "<AMOUNT>",
+        },
+        "notes": "For milestone invoicing: set unitPriceExcludingVatCurrency to the milestone amount (e.g. 50% of total). Then use PUT /project/{id}/:invoice to invoice.",
     },
     "POST /contact": {
         "description": "Create contact on customer",
