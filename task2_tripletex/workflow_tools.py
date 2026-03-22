@@ -1,12 +1,22 @@
 """Focused tools for the researcher: workflow steps and payload templates."""
 
 import json
+import logging
+import os
 
+import numpy as np
+import requests
 from langchain_core.tools import tool
+from rank_bm25 import BM25Okapi
 
 from task2_tripletex.payload_templates import PAYLOAD_TEMPLATES
 from task2_tripletex.task_patterns import TASK_PATTERNS
 
+logger = logging.getLogger(__name__)
+
+TEI_URL = os.getenv("TEI_URL", "http://localhost:8080")
+
+# --- Task workflow search (keyword-based) ---
 
 def _build_sections() -> dict[str, str]:
     """Parse task patterns into sections by title."""
@@ -72,6 +82,90 @@ def get_task_workflow(task_description: str) -> str:
     return f"{universal}\n\n---\n\n{best_match[1]}"
 
 
+# --- Payload template search (hybrid BM25 + semantic) ---
+
+# Endpoint path corrections (same as tripletex_get)
+_PATH_CORRECTIONS = {
+    "/account": "/ledger/account",
+    "/voucherType": "/ledger/voucherType",
+    "/voucher": "/ledger/voucher",
+    "/vatType": "/ledger/vatType",
+    "/paymentType": "/invoice/paymentType",
+    "/occupationCode": "/employee/employment/occupationCode",
+    "/employment": "/employee/employment",
+    "/cost": "/travelExpense/cost",
+    "/project/activity": "/project/projectActivity",
+    "/activity": "/project/projectActivity",
+}
+
+# Build BM25 index over templates
+_template_keys: list[str] = list(PAYLOAD_TEMPLATES.keys())
+_template_corpus: list[list[str]] = []
+for _k in _template_keys:
+    _t = PAYLOAD_TEMPLATES[_k]
+    _text = f"{_k} {_t['description']} {_t.get('notes', '')}".lower()
+    _template_corpus.append(_text.split())
+_template_bm25 = BM25Okapi(_template_corpus) if _template_corpus else None
+
+# Semantic index (lazy-built)
+_template_embeddings: np.ndarray | None = None
+
+
+def _build_template_embeddings():
+    """Build semantic embeddings for template search texts."""
+    global _template_embeddings
+    if _template_embeddings is not None:
+        return
+
+    texts = []
+    for k in _template_keys:
+        t = PAYLOAD_TEMPLATES[k]
+        texts.append(f"{k} {t['description']} {t.get('notes', '')}"[:500])
+
+    try:
+        resp = requests.post(f"{TEI_URL}/embed", json={"inputs": texts}, timeout=5)
+        resp.raise_for_status()
+        _template_embeddings = np.array(resp.json())
+        logger.info("Built template semantic index: %d templates", len(texts))
+    except Exception:
+        pass
+
+
+def _hybrid_template_search(query: str, top_k: int = 3) -> list[tuple[str, float]]:
+    """Search templates using hybrid BM25 + semantic, return (key, score) pairs."""
+    results = {}
+
+    # BM25
+    if _template_bm25:
+        tokens = query.lower().split()
+        scores = _template_bm25.get_scores(tokens)
+        for i, score in enumerate(scores):
+            if score > 0:
+                results[_template_keys[i]] = score
+
+    # Semantic
+    _build_template_embeddings()
+    if _template_embeddings is not None:
+        try:
+            resp = requests.post(f"{TEI_URL}/embed", json={"inputs": [query[:500]]}, timeout=5)
+            resp.raise_for_status()
+            query_emb = np.array(resp.json()[0])
+            norms = np.linalg.norm(_template_embeddings, axis=1) * np.linalg.norm(query_emb)
+            norms = np.where(norms == 0, 1, norms)
+            sims = np.dot(_template_embeddings, query_emb) / norms
+            for i, sim in enumerate(sims):
+                if sim > 0.3:
+                    key = _template_keys[i]
+                    # RRF-style fusion: add semantic score (normalized)
+                    results[key] = results.get(key, 0) + sim * 5
+        except Exception:
+            pass
+
+    # Sort by score descending
+    ranked = sorted(results.items(), key=lambda x: x[1], reverse=True)
+    return ranked[:top_k]
+
+
 @tool
 def get_payload_template(endpoint: str) -> str:
     """Get the EXACT verified JSON payload template for an API endpoint.
@@ -86,42 +180,39 @@ def get_payload_template(endpoint: str) -> str:
     Returns:
         The exact JSON template with placeholder values and field notes.
     """
+    # Apply path corrections
+    parts = endpoint.split(" ", 1)
+    method = parts[0] if len(parts) > 1 else ""
+    path = parts[-1]
+    if path in _PATH_CORRECTIONS:
+        path = _PATH_CORRECTIONS[path]
+        endpoint = f"{method} {path}" if method else path
+
     # Try exact match first
     template = PAYLOAD_TEMPLATES.get(endpoint)
-
-    # Try fuzzy match — prefer longest matching key to avoid "POST /project" matching "POST /project/projectActivity"
     if not template:
-        endpoint_lower = endpoint.lower()
-        best_key = None
-        best_len = 0
-        for key, val in PAYLOAD_TEMPLATES.items():
-            key_lower = key.lower()
-            if endpoint_lower == key_lower:
-                best_key = key
+        # Case-insensitive exact
+        for key in _template_keys:
+            if key.lower() == endpoint.lower():
+                template = PAYLOAD_TEMPLATES[key]
+                endpoint = key
                 break
-            if key_lower in endpoint_lower or endpoint_lower in key_lower:
-                if len(key) > best_len:
-                    best_key = key
-                    best_len = len(key)
-        if best_key:
-            template = PAYLOAD_TEMPLATES[best_key]
-            endpoint = best_key
 
-    # Try partial match on the path part — also prefer longest
+    # Hybrid BM25 + semantic search
     if not template:
-        best_key = None
-        best_len = 0
-        for key, val in PAYLOAD_TEMPLATES.items():
-            path = key.split(" ", 1)[-1] if " " in key else key
-            if path in endpoint or endpoint in path:
-                if len(key) > best_len:
-                    best_key = key
-                    best_len = len(key)
-        if best_key:
-            template = PAYLOAD_TEMPLATES[best_key]
-            endpoint = best_key
+        ranked = _hybrid_template_search(endpoint)
+        if ranked:
+            best_key, best_score = ranked[0]
+            if best_score > 0.5:
+                template = PAYLOAD_TEMPLATES[best_key]
+                endpoint = best_key
 
     if not template:
+        # Fall back to API docs
+        from task2_tripletex.api_docs_tool import lookup_api_docs
+        docs = lookup_api_docs.invoke({"search": path})
+        if docs and len(docs) > 50:
+            return f"No verified template for '{endpoint}'. Schema from API docs:\n\n{docs}"
         available = "\n".join(f"  - {k}" for k in PAYLOAD_TEMPLATES)
         return f"No template for '{endpoint}'. Available templates:\n{available}"
 
