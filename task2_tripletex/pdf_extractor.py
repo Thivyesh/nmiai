@@ -100,11 +100,10 @@ async def extract_file_data(files: list) -> str:
 
         elif f.mime_type == "application/pdf":
             content_parts.append({
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": "application/pdf",
-                    "data": f.content_base64,
+                "type": "file",
+                "file": {
+                    "filename": f.filename,
+                    "file_data": f"data:application/pdf;base64,{f.content_base64}",
                 },
             })
             content_parts.append({"type": "text", "text": f"[PDF: {f.filename}]"})
