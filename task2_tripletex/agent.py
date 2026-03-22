@@ -106,9 +106,10 @@ class TripletexAgent:
     _lock = asyncio.Lock()
 
     def __init__(self):
-        # Single agent: Gemini Pro
-        self.agent_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro",
+        # Single agent: GPT-4o
+        from langchain_openai import ChatOpenAI
+        self.agent_llm = ChatOpenAI(
+            model="gpt-4o",
             temperature=0,
             max_retries=2,
             timeout=60,

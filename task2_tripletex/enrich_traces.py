@@ -1,16 +1,15 @@
-"""Enrich trace history with fixes from task patterns and payload templates.
-
-For each failed API call in the traces, find the correct approach
-from our verified patterns and templates.
+"""Thorough trace enrichment: classify, map patterns, templates, fixes.
 
 Run: uv run python -m task2_tripletex.enrich_traces
 """
 
 import json
+import re
 from pathlib import Path
 
 from elasticsearch import Elasticsearch
 
+from task2_tripletex.accounting_concepts import CONCEPTS
 from task2_tripletex.payload_templates import PAYLOAD_TEMPLATES
 from task2_tripletex.task_patterns import TASK_PATTERNS
 
@@ -18,50 +17,127 @@ TRACE_PATH = Path(__file__).parent / "trace_history.json"
 ES_URL = "http://localhost:9200"
 INDEX = "tripletex-experience"
 
-# Common error → fix mappings from our verified testing
+# Task type classification keywords
+TASK_CLASSIFIERS = {
+    "salary": ["lønn", "salary", "payroll", "gehalt", "salario", "nómina", "lønnskjøring"],
+    "travel_expense": ["reiseregning", "travel expense", "nota de gastos", "reisekostenabrechnung", "note de frais"],
+    "invoice": ["faktura", "invoice", "rechnung", "factura", "facture", "fatura"],
+    "voucher": ["bilag", "voucher", "journal", "postering", "buchung", "lançamento"],
+    "dimension": ["dimensjon", "dimension", "kostsenter", "dimensão"],
+    "employee": ["ansatt", "employee", "mitarbeiter", "empleado", "employé", "funcionário", "tilsett"],
+    "customer": ["kunde", "customer", "klient", "client", "cliente"],
+    "supplier": ["leverandør", "supplier", "lieferant", "proveedor", "fournisseur", "fornecedor"],
+    "product": ["produkt", "product", "produkt", "producto", "produit"],
+    "project": ["prosjekt", "project", "projekt", "proyecto", "projet"],
+    "department": ["avdeling", "department", "abteilung", "departamento"],
+    "credit_note": ["kreditnota", "credit note", "nota de crédito", "gutschrift"],
+    "payment": ["betaling", "payment", "zahlung", "pago", "paiement", "pagamento"],
+    "payment_reversal": ["reverser", "tilbakeføring", "stornering", "zurückgebucht", "reverse", "annuler"],
+    "incoming_invoice": ["leverandørfaktura", "incoming invoice", "inngående", "eingangsrechnung", "fatura do fornecedor"],
+    "delete": ["slett", "delete", "eliminar", "löschen", "fjern"],
+    "update": ["oppdater", "endre", "update", "actualizar", "ändern"],
+    "month_end": ["månedsavslutning", "periodeslutt", "month-end", "periodiser", "avskrivning", "depreciation"],
+    "reminder_fee": ["purregebyr", "purring", "reminder", "inkasso", "forfalt"],
+    "currency_exchange": ["valutadifferanse", "agio", "disagio", "currency", "exchange rate", "valutagevinst"],
+}
+
+# Error → fix + template + concept mapping
 ERROR_FIXES = {
-    "debitAmount": "Use 'amountGross' and 'amountGrossCurrency', NOT 'debitAmount' or 'creditAmount'",
-    "creditAmount": "Use 'amountGross' (negative for credit) and 'amountGrossCurrency', NOT 'creditAmount'",
-    "amount.*not.*valid": "Use 'amountGross' and 'amountGrossCurrency' for vouchers, 'amountCurrencyIncVat' for travel costs",
-    "phoneNumber.*employee": "Use 'phoneNumberMobile' for employees, 'phoneNumber' for customers",
-    "Brukertype": "Do NOT set userType on first attempt. If error, retry with userType: 'STANDARD'",
-    "department.*fylles": "Department is REQUIRED for employees. GET /department first",
-    "deliveryDate": "deliveryDate is REQUIRED on orders",
-    "bankkontonummer": "Set bankAccountNumber on ledger account 1920 before creating invoices",
-    "Produktnummeret.*bruk": "Product number already exists. GET /product?number=N to find its ID",
-    "mva-kode": "Do NOT set vatType on products unless prompt specifies a VAT rate. Default works.",
-    "account.*number": "ALWAYS use account {'id': N} from GET /ledger/account, NEVER {'number': N}",
-    "quantity": "Use 'count' NOT 'quantity' for order lines",
-    "description.*eksisterer": "Invoice uses 'comment' NOT 'description'",
-    "Request mapping": "Wrong field names. Look up the exact schema with get_payload_template or lookup_api_docs",
-    "Object not found": "Wrong ID or URL format. For entitlements: /employee/entitlement/:grantEntitlementsByTemplate?employeeId=N",
-    "Kunde mangler": "Account has ledgerType CUSTOMER — include customer: {'id': N} in the voucher posting",
-    "Leverandør mangler": "Account has ledgerType SUPPLIER — include supplier: {'id': N} in the voucher posting",
-    "Arbeidsforholdet.*virksomhet": "Employment needs division. Create division first, then link it to employment",
-    "Ugyldig år": "Year must be current (2026). Past years fail.",
-    "proxy token": "Token expired or wrong sandbox. This was a concurrency issue — now serialized with asyncio.Lock",
+    "debitAmount": {"fix": "Use 'amountGross' and 'amountGrossCurrency'", "template": "POST /ledger/voucher", "concept": "receipt booking"},
+    "creditAmount": {"fix": "Use 'amountGross' (negative for credit)", "template": "POST /ledger/voucher", "concept": None},
+    "Brukertype": {"fix": "Don't set userType first. Retry with userType: 'STANDARD'", "template": "POST /employee", "concept": None},
+    "department.*fylles": {"fix": "Department REQUIRED. GET /department first", "template": "POST /employee", "concept": None},
+    "deliveryDate": {"fix": "deliveryDate REQUIRED on orders", "template": "POST /order", "concept": None},
+    "bankkontonummer": {"fix": "Set bankAccountNumber on ledger account 1920", "template": "PUT /ledger/account/{id}", "concept": None},
+    "Produktnummeret.*bruk": {"fix": "Product number exists. GET /product?number=N", "template": "POST /product", "concept": None},
+    "mva-kode": {"fix": "Don't set vatType on products unless specified", "template": "POST /product", "concept": "vat handling"},
+    "quantity": {"fix": "Use 'count' NOT 'quantity'", "template": "POST /order", "concept": None},
+    "description.*eksisterer": {"fix": "Invoice uses 'comment' NOT 'description'", "template": "POST /invoice", "concept": None},
+    "Request mapping": {"fix": "Wrong field names. Use get_payload_template", "template": None, "concept": None},
+    "Object not found": {"fix": "Wrong ID/URL. Entitlements: query params not path", "template": None, "concept": None},
+    "Kunde mangler": {"fix": "Account needs customer ID in posting", "template": "POST /ledger/voucher", "concept": "reminder fee"},
+    "Leverandør mangler": {"fix": "Account needs supplier ID in posting", "template": "POST /ledger/voucher", "concept": "supplier invoice"},
+    "Arbeidsforholdet.*virksomhet": {"fix": "Employment needs division. Create division first", "template": "POST /employee/employment", "concept": None},
+    "Ugyldig år": {"fix": "Year must be current (2026)", "template": "POST /salary/transaction", "concept": None},
+    "proxy token": {"fix": "Concurrency issue — now serialized", "template": None, "concept": None},
+    "Validering feilet": {"fix": "Validation error — check field names with get_payload_template", "template": None, "concept": None},
+    "phoneNumber": {"fix": "Employee: phoneNumberMobile. Customer: phoneNumber", "template": "POST /employee", "concept": None},
+    "municipalityDate": {"fix": "Division needs municipalityDate + municipality", "template": None, "concept": None},
+    "amountExcludingVat": {"fix": "Not a valid invoice field. Use 'amount' or 'amountOutstanding'", "template": None, "concept": None},
+    "amountPaid": {"fix": "Not a valid invoice field. Use 'amountOutstanding'", "template": None, "concept": None},
+    "Enhetspris": {"fix": "Set isPrioritizeAmountsIncludingVat:false, use unitPriceExcludingVatCurrency", "template": "POST /order", "concept": "vat handling"},
+    "externalId": {"fix": "Field format issue on incoming invoice", "template": None, "concept": "supplier invoice"},
 }
 
 
-def find_fix_for_error(error_msg: str) -> str:
-    """Match error message to known fix."""
-    error_lower = error_msg.lower()
-    for pattern, fix in ERROR_FIXES.items():
-        if pattern.lower() in error_lower:
-            return fix
-    return ""
+def classify_task(prompt: str) -> list[str]:
+    """Classify task type from prompt text."""
+    prompt_lower = prompt.lower()
+    types = []
+    for task_type, keywords in TASK_CLASSIFIERS.items():
+        if any(kw in prompt_lower for kw in keywords):
+            types.append(task_type)
+    return types or ["unknown"]
 
 
-def find_template_for_endpoint(endpoint: str) -> str:
-    """Find the correct payload template for an endpoint."""
-    for key, template in PAYLOAD_TEMPLATES.items():
-        path = key.split(" ", 1)[-1] if " " in key else key
-        if path in endpoint or endpoint in path:
-            payload = template["payload"]
-            if isinstance(payload, dict):
-                return json.dumps(payload, indent=2)[:300]
-            return str(payload)[:200]
-    return ""
+def get_pattern_section(task_types: list[str]) -> str:
+    """Get relevant task pattern sections."""
+    sections = []
+    for line in TASK_PATTERNS.split("\n## "):
+        line_lower = line.lower()
+        for tt in task_types:
+            if tt.replace("_", " ") in line_lower or tt in line_lower:
+                # Extract just the workflow and gotchas
+                lines = line.split("\n")
+                relevant = [l for l in lines if l.strip() and not l.startswith("Keywords:")]
+                sections.append("\n".join(relevant[:15]))
+                break
+    return "\n---\n".join(sections[:2]) if sections else ""
+
+
+def find_fix(error_msg: str) -> dict:
+    """Find fix for an error message."""
+    for pattern, fix_info in ERROR_FIXES.items():
+        if re.search(pattern, error_msg, re.IGNORECASE):
+            result = {"fix": fix_info["fix"]}
+            if fix_info.get("template") and fix_info["template"] in PAYLOAD_TEMPLATES:
+                template = PAYLOAD_TEMPLATES[fix_info["template"]]
+                payload = template["payload"]
+                result["correct_template"] = json.dumps(payload, indent=2)[:300] if isinstance(payload, dict) else str(payload)[:200]
+                result["template_notes"] = template.get("notes", "")[:150]
+            if fix_info.get("concept") and fix_info["concept"] in CONCEPTS:
+                concept = CONCEPTS[fix_info["concept"]]
+                result["accounting_context"] = concept.get("explanation", "")[:150]
+            return result
+    return {"fix": "Unknown error. Use lookup_api_docs for the correct schema."}
+
+
+def get_templates_for_endpoints(endpoints: list[str]) -> str:
+    """Get payload templates for a list of endpoints."""
+    templates = []
+    for ep in endpoints:
+        for key, tmpl in PAYLOAD_TEMPLATES.items():
+            path = key.split(" ", 1)[-1] if " " in key else key
+            if path in ep or ep in path:
+                payload = tmpl["payload"]
+                payload_str = json.dumps(payload, indent=2)[:250] if isinstance(payload, dict) else str(payload)[:150]
+                templates.append(f"{key}: {payload_str}")
+                break
+    return "\n".join(templates[:3])
+
+
+def build_lesson_learned(task_types, successful, failed_with_fixes, total_errors):
+    """Build a lesson_learned summary."""
+    lesson = f"Task type: {', '.join(task_types)}. "
+    if total_errors == 0:
+        lesson += "SUCCESS — 0 errors. "
+        if successful:
+            lesson += f"Approach: {'; '.join(successful[:3])}. "
+    else:
+        lesson += f"{total_errors} errors. "
+        for f in failed_with_fixes[:3]:
+            lesson += f"{f} "
+    return lesson[:500]
 
 
 def main():
@@ -70,101 +146,99 @@ def main():
 
     es = Elasticsearch(ES_URL)
 
-    # Delete old index
     if es.indices.exists(index=INDEX):
         es.indices.delete(index=INDEX)
 
-    es.indices.create(
-        index=INDEX,
-        body={
-            "mappings": {
-                "properties": {
-                    "trace_id": {"type": "keyword"},
-                    "timestamp": {"type": "date", "format": "yyyy-MM-dd'T'HH:mm:ss||yyyy-MM-dd"},
-                    "task_prompt": {"type": "text"},
-                    "total_errors": {"type": "integer"},
-                    "total_tool_calls": {"type": "integer"},
-                    "successful_calls": {"type": "text"},
-                    "failed_calls_with_fixes": {"type": "text"},
-                    "correct_templates": {"type": "text"},
-                    "tags": {"type": "keyword"},
-                }
+    es.indices.create(index=INDEX, body={
+        "mappings": {
+            "properties": {
+                "trace_id": {"type": "keyword"},
+                "timestamp": {"type": "date", "format": "yyyy-MM-dd'T'HH:mm:ss||yyyy-MM-dd"},
+                "task_prompt": {"type": "text"},
+                "task_type": {"type": "keyword"},
+                "total_errors": {"type": "integer"},
+                "total_tool_calls": {"type": "integer"},
+                "lesson_learned": {"type": "text"},
+                "correct_workflow": {"type": "text"},
+                "correct_templates": {"type": "text"},
+                "error_fixes": {"type": "text"},
+                "successful_calls": {"type": "text"},
+                "tags": {"type": "keyword"},
             }
-        },
-    )
+        }
+    })
 
     indexed = 0
+    fixes_found = 0
+
     for t in traces:
-        if not t.get("task_prompt"):
+        prompt = t.get("task_prompt", "")
+        if not prompt:
             continue
 
-        # Build successful calls summary
-        successful = []
-        for tc in t.get("tool_calls", []):
-            if not tc["is_error"] and tc["name"].startswith("tripletex_"):
-                successful.append(f"{tc['name']} {tc.get('endpoint', '')} OK")
+        task_types = classify_task(prompt)
+        pattern_section = get_pattern_section(task_types)
 
-        # Build failed calls with fixes
+        # Process tool calls
+        successful = []
         failed_with_fixes = []
-        correct_templates = []
+        error_fix_texts = []
+        all_endpoints = []
+
         for tc in t.get("tool_calls", []):
+            endpoint = tc.get("endpoint", "")
+            if endpoint:
+                all_endpoints.append(endpoint)
+
             if tc["is_error"]:
                 error = tc.get("error_msg", "")
-                endpoint = tc.get("endpoint", "")
-                fix = find_fix_for_error(error)
-                template = find_template_for_endpoint(endpoint)
-
-                entry = f"{tc['name']} {endpoint} FAILED: {error}"
-                if fix:
-                    entry += f"\n  FIX: {fix}"
-                if template:
-                    entry += f"\n  CORRECT TEMPLATE: {template[:200]}"
-                    correct_templates.append(f"{endpoint}: {template[:200]}")
+                fix_info = find_fix(error)
+                fixes_found += 1
+                entry = f"{tc['name']} {endpoint}: {fix_info['fix']}"
+                if fix_info.get("correct_template"):
+                    entry += f" TEMPLATE: {fix_info['correct_template'][:150]}"
+                if fix_info.get("accounting_context"):
+                    entry += f" CONTEXT: {fix_info['accounting_context']}"
                 failed_with_fixes.append(entry)
+                error_fix_texts.append(entry)
+            elif tc["name"].startswith("tripletex_"):
+                successful.append(f"{tc['name']} {endpoint} OK")
+
+        templates = get_templates_for_endpoints(all_endpoints)
+        lesson = build_lesson_learned(task_types, successful, failed_with_fixes, t["total_errors"])
 
         # Tags
-        endpoints = " ".join(tc.get("endpoint", "") for tc in t.get("tool_calls", []))
-        tags = []
-        if "/invoice" in endpoints: tags.append("invoice")
-        if "/customer" in endpoints: tags.append("customer")
-        if "/employee" in endpoints: tags.append("employee")
-        if "/product" in endpoints: tags.append("product")
-        if "/order" in endpoints: tags.append("order")
-        if "/travelExpense" in endpoints: tags.append("travel_expense")
-        if "/voucher" in endpoints: tags.append("voucher")
-        if "payment" in endpoints.lower(): tags.append("payment")
-        if "/supplier" in endpoints: tags.append("supplier")
-        if "/salary" in endpoints: tags.append("salary")
-        if "/department" in endpoints: tags.append("department")
-        if "/project" in endpoints: tags.append("project")
-        if "dimension" in endpoints.lower(): tags.append("dimension")
-        if "creditNote" in endpoints: tags.append("credit_note")
-        if "entitlement" in endpoints: tags.append("entitlements")
-        if "/division" in endpoints: tags.append("division")
+        tags = list(set(task_types))
+        if any("/voucher" in ep for ep in all_endpoints): tags.append("voucher")
+        if any("/invoice" in ep for ep in all_endpoints): tags.append("invoice")
+        if any("/employee" in ep for ep in all_endpoints): tags.append("employee")
+        if any("/salary" in ep for ep in all_endpoints): tags.append("salary")
+        if any("/travelExpense" in ep for ep in all_endpoints): tags.append("travel_expense")
+        if any("/payment" in ep.lower() for ep in all_endpoints): tags.append("payment")
+        if any("dimension" in ep.lower() for ep in all_endpoints): tags.append("dimension")
 
         doc = {
             "trace_id": t["trace_id"],
             "timestamp": t["timestamp"],
-            "task_prompt": t["task_prompt"],
+            "task_prompt": prompt,
+            "task_type": task_types,
             "total_errors": t["total_errors"],
             "total_tool_calls": t["total_tool_calls"],
-            "successful_calls": "\n".join(successful),
-            "failed_calls_with_fixes": "\n".join(failed_with_fixes),
-            "correct_templates": "\n".join(correct_templates),
-            "tags": tags,
+            "lesson_learned": lesson,
+            "correct_workflow": pattern_section[:1000],
+            "correct_templates": templates[:500],
+            "error_fixes": "\n".join(error_fix_texts[:5]),
+            "successful_calls": "\n".join(successful[:10]),
+            "tags": list(set(tags)),
         }
 
         es.index(index=INDEX, id=t["trace_id"], body=doc)
         indexed += 1
 
     es.indices.refresh(index=INDEX)
-    print(f"Indexed {indexed} enriched traces into '{INDEX}'")
-
-    # Show some stats
-    errors_with_fixes = sum(1 for t in traces for tc in t.get("tool_calls", [])
-                           if tc["is_error"] and find_fix_for_error(tc.get("error_msg", "")))
-    total_errors = sum(1 for t in traces for tc in t.get("tool_calls", []) if tc["is_error"])
-    print(f"Errors with fixes: {errors_with_fixes}/{total_errors}")
+    print(f"Indexed {indexed} enriched traces")
+    print(f"Errors mapped to fixes: {fixes_found}")
+    print(f"Task types found: {set(tt for t in traces for tt in classify_task(t.get('task_prompt','')))}")
 
 
 if __name__ == "__main__":
