@@ -107,55 +107,122 @@
 - Leaderboard: 0.8881 (worse than 0.8944 due to ONNX issues)
 - Using .pt through ultralytics: 0.7676 local (same pipeline quality)
 
+### E13: V2 detector (fixed super-category mapping)
+- YOLOv8m, 50 epochs, 640px, fixed spread group (18→15 real products)
+- **mAP@0.5: 0.88** (vs v1: 0.90 — slightly lower, different class distribution)
+- Clean mapping removes cross-contamination
+
+### E14: Embedding teacher (embeddinggemma, fixed mapping)
+- OCR text → embeddinggemma (768d) → cosine sim to product names
+- Combined [backbone 576d + embedding sims 356d] = 932 features → LogReg
+- Per-group feature selection: bbox features only for cookies (+8.1pp)
+- **Results vs old backbone-only teacher:**
+
+| Group | Old Teacher | Embedding Teacher | Improvement |
+|---|---|---|---|
+| knekkebroed | 42.1% | **64.2%** | +22.1pp |
+| cereal | 41.5% | **60.9%** | +19.5pp |
+| other | 43.8% | **61.6%** | +17.8pp |
+| spread | 22.5% | **40.0%** | +17.5pp |
+| eggs | 59.2% | **69.4%** | +10.2pp |
+| chocolate | 79.9% | **87.8%** | +7.9pp |
+| tea | 52.6% | **60.3%** | +7.7pp |
+| coffee | 54.5% | **60.0%** | +5.5pp |
+| cookies | 48.6% | 48.6% | 0 |
+
+- **MLP vs LogReg comparison**: LogReg wins every group. MLP overfits with 932 features and <2k samples per group.
+- Cookies: 0% improvement because problem is data scarcity (149 samples), not feature quality
+- Coffee: low improvement because OCR reads brand but not variant text (FILTERMALT vs KOKMALT too small)
+
+### E15: Refined v2 detector (soft labels + pseudo-labels, clean mapping)
+- Ensemble of v2 + 1-class detectors → WBF → refined boxes + 1,581 pseudo-labels
+- 22,175 GT boxes refined (70% GT + 30% detector average)
+- Status: **TRAINING**
+
+### E16: Distill from embedding teacher v2
+- EfficientNet-b1 distilled from embedding teacher soft labels
+- **Results:**
+
+| Group | V1 (old teacher) | V3 (embedding teacher) |
+|---|---|---|
+| knekkebroed | 92.9% | **93.7%** (+0.8pp) |
+| coffee | 87.7% | **89.9%** (+2.2pp) |
+| other | 91.5% | **93.7%** (+2.2pp) |
+| cereal | 93.8% | 93.7% (-0.1pp) |
+| eggs | 99.1% | 97.7% (-1.4pp) |
+| spread | 95.9% | 90.9% (-5.0pp) |
+| cookies | 100% | 100% (same) |
+| chocolate | 99.3% | 99.3% (same) |
+| tea | 92.2% | 91.6% (-0.6pp) |
+| **Average** | **94.7%** | **94.5%** (-0.2pp) |
+
+- Marginal change — the better teacher doesn't transfer well through distillation because the student only sees images, not the OCR/embedding features the teacher used.
+
+### E17: V2 pipeline eval (v2 detector + v3 classifiers + blend + conf=0.001)
+- **Local score: 0.7759** (vs v1 original: 0.7676, vs refined v1: 0.7924)
+- Better than original but worse than refined v1 — v2 detector not as strong
+
+### E18: Fine-tuned CLIP teacher
+- Fine-tuned openai/clip-vit-base-patch32 on crop-product name pairs
+- Contrastive learning: 14.8M / 151.3M params trainable (10%)
+- Froze most of vision encoder, fine-tuned last 2 layers + projections
+- **Results:**
+
+| Epoch | Loss | Val Accuracy |
+|---|---|---|
+| 0 (zero-shot) | — | 24.1% |
+| 1 | 0.911 | 43.8% |
+| 5 | 0.198 | 60.9% |
+| 10 | 0.130 | **67.0%** |
+
+- **Best teacher so far at 67.0%** (vs embedding teacher 63%, backbone LogReg 47%)
+- Generated soft labels for all 9468 train + 2977 val crops
+- Saved fine-tuned model to output/clip_teacher/best_model/
+
 ---
 
 ## Running Experiments
 
-### E13: V2 detector (fixed super-category mapping)
-- YOLOv8m, 50 epochs, 640px, fixed spread group
-- Status: TRAINING
-- Next: build refined v2 with soft labels
+### E19: Distill from fine-tuned CLIP teacher
+- EfficientNet-b1 per group, using CLIP soft labels
+- Status: **TRAINING**
+- Expected: better classification than E16 due to stronger teacher (67% vs 63%)
 
-### E14: Embedding teacher v2 (fixed mapping)
-- OCR + embeddinggemma on all training crops
-- Status: TRAINING (OCR phase)
-- Next: generate soft labels → distill classifiers
+### E15: Refined v2 detector
+- Status: **TRAINING**
+- Expected: better than refined v1 (0.7924) due to clean mapping
 
 ---
 
 ## Planned Experiments
 
-### E15: Refined v2 detector
-- Build detection soft labels using v2 detector ensemble
-- Train refined v2 on soft labels + pseudo-labels
-- Expected: better than refined v1 (0.7924) due to clean mapping
-
-### E16: Distill from embedding teacher v2
-- Use embedding teacher soft labels to train EfficientNet-b1
-- Compare with E5 (old backbone-only soft labels)
-
-### E17: Extract backbone from refined v2
-- Re-extract 576d features using refined v2 backbone
-- Combine with embedding similarities
-- Train MLP teacher → generate even better soft labels
-
-### E18: Full pipeline with all improvements
-- Refined v2 detector + embedding-distilled classifiers
+### E20: Full pipeline v3
+- Refined v2 detector + CLIP-distilled classifiers
 - WBF ensemble + score blending + conf=0.001
-- Expected: significant improvement over 0.8944
+- End-to-end eval to measure total improvement
 
-### E19 (future): Experiment B — embedding teacher for detection
-- Use embedding teacher predictions as category labels in detection training
-- Compare with E15 (standard detection soft labels)
+### E21: Combined CLIP + embedding teacher
+- Merge soft labels from CLIP and embeddinggemma teachers
+- Each captures different signals (vision vs OCR text)
+- May improve over CLIP alone
 
-### E20 (future): EVA02-Tiny classifiers
-- Replace EfficientNet-b1 with EVA02-Tiny from timm
-- Winner's classifier choice, better accuracy/size ratio
+### E22: Experiment B — CLIP teacher for detection labels
+- Use CLIP teacher predictions as category labels in detection training
+- Better category labels → better 9-class detection
 
-### E21 (future): YOLOv8l refined on A100
-- Train YOLOv8l on soft label dataset
+### E23: EVA02-Tiny/Small classifiers
+- Replace EfficientNet-b1 with EVA02 from timm (winner's choice)
+- Better accuracy/size ratio
+
+### E24: YOLOv8l refined on A100
+- Train YOLOv8l on soft label dataset at 1280px
 - Ensemble refined_m + refined_l with WBF
 
-### E22 (future): Train on all 248 images (no val split)
+### E25: Train on all 248 images (no val split)
 - Winners all trained on full data for final submission
-- Need separate evaluation strategy (cross-validation or trust leaderboard)
+- Need separate evaluation strategy
+
+### E26: CLIP fine-tuning improvements
+- More epochs, larger batch size, different learning rate
+- Try CLIP ViT-L for even better teacher
+- Fine-tune text encoder too (currently frozen)

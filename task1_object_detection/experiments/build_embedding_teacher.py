@@ -30,13 +30,13 @@ EMBED_URL = "http://localhost:8080/embed"
 
 SUPER_CATEGORIES = {
     "knekkebroed": ["knekkebrød", "knekke", "flatbrød", "wasa", "sigdal", "leksands", "ryvita", "korni"],
-    "coffee": ["kaffe", "coffee", "espresso", "nescafe", "evergood", "friele", "ali ", "dolce gusto", "cappuccino", "kapsel"],
+    "coffee": ["kaffe", "coffee", "espresso", "nescafe", "evergood", "friele", "dolce gusto", "cappuccino", "kapsel", "tassimo", "zoegas"],
     "tea": [" te ", "tea", "twinings", "lipton", "pukka", "urtete"],
-    "cereal": ["frokost", "havre", "müsli", "granola", "corn flakes", "cheerios", "cruesli", "puffet", "fras"],
+    "cereal": ["frokost", "havre", "müsli", "granola", "corn flakes", "cheerios", "cruesli", "puffet", "fras", "weetabix", "fitness"],
     "eggs": ["egg"],
-    "spread": ["smør", "bremykt", "brelett", "ost ", "cream cheese"],
-    "cookies": ["kjeks", "cookie", "grissini"],
-    "chocolate": ["sjokolade", "nugatti", "regia", "cocoa"],
+    "spread": ["smør", "bremykt", "brelett", "margarin", "olivero", "meierismør"],
+    "cookies": ["kjeks", "cookie", "grissini", "surdeig"],
+    "chocolate": ["sjokolade", "nugatti", "regia", "cocoa", "kakao"],
 }
 GROUP_NAMES = ["knekkebroed", "coffee", "tea", "cereal", "eggs", "spread", "cookies", "chocolate", "other"]
 
