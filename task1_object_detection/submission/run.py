@@ -2,7 +2,8 @@
 NM i AI - NorgesGruppen Object Detection
 python run.py --input /data/images --output /output/predictions.json
 
-All inference via ONNX (no pickle, no torch.load).
+WBF ensemble of YOLOv8m (9-class) + YOLOv8x (9-class) detectors.
+EfficientNet-b1 classifiers with score blending.
 """
 
 import argparse
@@ -10,129 +11,61 @@ import json
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
-import onnxruntime as ort
 import torch
+_torch_load = torch.load
+torch.load = lambda f, *a, **kw: _torch_load(f, *a, **{**kw, "weights_only": False})
 import torch.nn as nn
 from torchvision import transforms
 from torchvision.models import efficientnet_b1
+from PIL import Image
+from ultralytics import YOLO
+from ensemble_boxes import weighted_boxes_fusion
 
 GROUP_NAMES = [
     "knekkebroed", "coffee", "tea", "cereal",
     "eggs", "spread", "cookies", "chocolate", "other",
 ]
 
-
-def load_detector():
-    """Load 9-class detector via ONNX runtime."""
-    model_path = Path(__file__).parent / "detector.onnx"
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    session = ort.InferenceSession(str(model_path), providers=providers)
-    return session
-
-
-def preprocess_detector(img_path, imgsz=640):
-    """Preprocess image for YOLO ONNX detector."""
-    img = Image.open(img_path).convert("RGB")
-    orig_w, orig_h = img.size
-
-    # Resize with letterboxing
-    scale = min(imgsz / orig_w, imgsz / orig_h)
-    new_w, new_h = int(orig_w * scale), int(orig_h * scale)
-    img_resized = img.resize((new_w, new_h), Image.BILINEAR)
-
-    # Pad to imgsz x imgsz
-    padded = Image.new("RGB", (imgsz, imgsz), (114, 114, 114))
-    pad_x = (imgsz - new_w) // 2
-    pad_y = (imgsz - new_h) // 2
-    padded.paste(img_resized, (pad_x, pad_y))
-
-    arr = np.array(padded).astype(np.float32) / 255.0
-    arr = arr.transpose(2, 0, 1)[np.newaxis]  # [1, 3, 640, 640]
-    return arr, img, scale, pad_x, pad_y
+# --- Configuration ---
+DET_CONF = 0.001         # Ultra-low: maximize recall, let WBF filter
+DET_IOU = 0.6            # NMS IoU threshold
+DET_IMGSZ = 1280         # High resolution
+WBF_IOU_THR = 0.55       # WBF merge threshold
+WBF_SKIP_THR = 0.001     # Don't skip any boxes
+CROP_PADDING = 0.15      # 15% padding around crops (winner used this)
+SCORE_BLEND = 0.5        # score = det * (blend + (1-blend) * cls)
 
 
-def postprocess_detector(output, scale, pad_x, pad_y, conf_threshold=0.15):
-    """Parse YOLO ONNX output to boxes."""
-    # Output shape: [1, 13, 8400] for 9-class detector
-    # 13 = 4 (box) + 9 (class scores)
-    pred = output[0][0]  # [13, 8400]
+def load_detectors(device):
+    """Load both detector models."""
+    base = Path(__file__).parent
+    detectors = []
 
-    boxes = pred[:4].T  # [8400, 4] - cx, cy, w, h
-    scores = pred[4:].T  # [8400, 9]
+    det_m = base / "detector_m.pt"
+    if det_m.exists():
+        detectors.append({"model": YOLO(str(det_m)), "weight": 1, "name": "yolov8m"})
 
-    detections = []
-    for i in range(len(boxes)):
-        class_scores = scores[i]
-        max_score = class_scores.max()
-        if max_score < conf_threshold:
-            continue
+    det_x = base / "detector_x.pt"
+    if det_x.exists():
+        detectors.append({"model": YOLO(str(det_x)), "weight": 2, "name": "yolov8x"})
 
-        cls_id = int(class_scores.argmax())
-        cx, cy, w, h = boxes[i]
+    # Fallback: single detector
+    if not detectors:
+        det = base / "detector.pt"
+        if det.exists():
+            detectors.append({"model": YOLO(str(det)), "weight": 1, "name": "detector"})
 
-        # Remove padding and rescale to original image
-        x1 = (cx - w / 2 - pad_x) / scale
-        y1 = (cy - h / 2 - pad_y) / scale
-        bw = w / scale
-        bh = h / scale
-
-        detections.append({
-            "x1": float(x1), "y1": float(y1),
-            "w": float(bw), "h": float(bh),
-            "conf": float(max_score),
-            "cls": cls_id,
-        })
-
-    return detections
-
-
-def nms(detections, iou_threshold=0.5):
-    """Simple NMS."""
-    if not detections:
-        return []
-
-    dets = sorted(detections, key=lambda d: d["conf"], reverse=True)
-    keep = []
-
-    while dets:
-        best = dets.pop(0)
-        keep.append(best)
-        remaining = []
-        for d in dets:
-            iou = compute_iou(best, d)
-            if iou < iou_threshold:
-                remaining.append(d)
-        dets = remaining
-
-    return keep
-
-
-def compute_iou(a, b):
-    x1 = max(a["x1"], b["x1"])
-    y1 = max(a["y1"], b["y1"])
-    x2 = min(a["x1"] + a["w"], b["x1"] + b["w"])
-    y2 = min(a["y1"] + a["h"], b["y1"] + b["h"])
-    inter = max(0, x2 - x1) * max(0, y2 - y1)
-    area_a = a["w"] * a["h"]
-    area_b = b["w"] * b["h"]
-    union = area_a + area_b - inter
-    return inter / union if union > 0 else 0
+    return detectors
 
 
 def load_classifiers(device):
-    """Load classifiers from .npy weights + reconstruct models."""
     base = Path(__file__).parent
-
     weights = np.load(str(base / "classifiers.npy"))
     with open(base / "classifier_meta.json") as f:
         meta = json.load(f)
 
     classifiers = {}
-    # Reconstruct each group's model
-    groups_seen = set()
     param_data = {}
-
     for i in range(len(meta["groups"])):
         gn = meta["groups"][i]
         pname = meta["param_names"][i]
@@ -141,24 +74,79 @@ def load_classifiers(device):
         size = 1
         for s in shape:
             size *= s
-        arr = weights[offset:offset + size].reshape(shape)
-
+        arr = weights[offset:offset + size].astype(np.float32).reshape(shape)
         param_data.setdefault(gn, {})[pname] = torch.from_numpy(arr)
-        groups_seen.add(gn)
 
-    for gn in groups_seen:
+    for gn in set(meta["groups"]):
         classes = meta["classes"][gn]
         n_classes = len(classes)
-
         model = efficientnet_b1(weights=None)
         model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, n_classes)
         model.load_state_dict(param_data[gn])
         model = model.to(device)
         model.eval()
-
         classifiers[gn] = {"model": model, "classes": classes}
 
     return classifiers
+
+
+def run_detector(det, img_path, device):
+    """Run a single detector, return normalized boxes + scores + labels."""
+    with torch.no_grad():
+        results = det["model"](str(img_path), device=device, verbose=False,
+                                conf=DET_CONF, iou=DET_IOU, imgsz=DET_IMGSZ,
+                                max_det=500)
+    if not results or results[0].boxes is None:
+        return [], [], []
+
+    boxes = results[0].boxes
+    orig_shape = results[0].orig_shape  # (H, W)
+    oh, ow = orig_shape
+
+    boxes_norm = []
+    scores = []
+    labels = []
+
+    for i in range(len(boxes)):
+        x1, y1, x2, y2 = boxes.xyxy[i].tolist()
+        conf = float(boxes.conf[i].item())
+        cls_id = int(boxes.cls[i].item())
+
+        # Normalize to [0, 1]
+        boxes_norm.append([x1 / ow, y1 / oh, x2 / ow, y2 / oh])
+        scores.append(conf)
+        labels.append(cls_id)
+
+    return boxes_norm, scores, labels
+
+
+def ensemble_detect(detectors, img_path, device):
+    """Run all detectors and merge with WBF."""
+    all_boxes = []
+    all_scores = []
+    all_labels = []
+    weights = []
+
+    for det in detectors:
+        boxes, scores, labels = run_detector(det, img_path, device)
+        if boxes:
+            all_boxes.append(boxes)
+            all_scores.append(scores)
+            all_labels.append(labels)
+            weights.append(det["weight"])
+
+    if not all_boxes:
+        return [], [], []
+
+    # WBF merge
+    fused_boxes, fused_scores, fused_labels = weighted_boxes_fusion(
+        all_boxes, all_scores, all_labels,
+        weights=weights,
+        iou_thr=WBF_IOU_THR,
+        skip_box_thr=WBF_SKIP_THR,
+    )
+
+    return fused_boxes, fused_scores, fused_labels
 
 
 def classify_crops_batched(crops, group_indices, classifiers, transform, device, batch_size=64):
@@ -200,8 +188,9 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    print("Loading detector (ONNX)...")
-    detector = load_detector()
+    print("Loading detectors...")
+    detectors = load_detectors(device)
+    print(f"  Loaded: {[d['name'] for d in detectors]}")
 
     print("Loading classifiers...")
     classifiers = load_classifiers(device)
@@ -224,45 +213,65 @@ def main():
     for img_idx, img_path in enumerate(image_files):
         image_id = int(img_path.stem.split("_")[-1])
 
-        # Detect
-        inp, img, scale, px, py = preprocess_detector(img_path)
-        output = detector.run(None, {detector.get_inputs()[0].name: inp})
-        detections = postprocess_detector(output, scale, px, py, conf_threshold=0.15)
-        detections = nms(detections, iou_threshold=0.5)
+        # Step 1: Ensemble detection
+        fused_boxes, fused_scores, fused_labels = ensemble_detect(
+            detectors, img_path, device
+        )
 
-        if not detections:
+        if len(fused_boxes) == 0:
             continue
 
-        # Crop and classify
+        img = Image.open(img_path).convert("RGB")
+        ow, oh = img.size
+
+        # Collect crops
         crops = []
         group_names = []
         det_data = []
 
-        for d in detections:
-            x1, y1, w, h = d["x1"], d["y1"], d["w"], d["h"]
-            if w < 10 or h < 10:
+        for i in range(len(fused_boxes)):
+            # Denormalize
+            x1 = fused_boxes[i][0] * ow
+            y1 = fused_boxes[i][1] * oh
+            x2 = fused_boxes[i][2] * ow
+            y2 = fused_boxes[i][3] * oh
+            det_conf = float(fused_scores[i])
+            det_cls = int(fused_labels[i])
+
+            w, h = x2 - x1, y2 - y1
+            if w < 5 or h < 5:
                 continue
-            gn = GROUP_NAMES[d["cls"]] if d["cls"] < len(GROUP_NAMES) else "other"
-            pad_x, pad_y = w * 0.05, h * 0.05
+
+            gn = GROUP_NAMES[det_cls] if det_cls < len(GROUP_NAMES) else "other"
+
+            # Crop with padding
+            pad_x = w * CROP_PADDING
+            pad_y = h * CROP_PADDING
             crop = img.crop((
                 max(0, int(x1 - pad_x)), max(0, int(y1 - pad_y)),
-                min(img.width, int(x1 + w + pad_x)), min(img.height, int(y1 + h + pad_y)),
+                min(ow, int(x2 + pad_x)), min(oh, int(y2 + pad_y)),
             ))
             crops.append(crop)
             group_names.append(gn)
-            det_data.append((x1, y1, w, h, d["conf"]))
+            det_data.append((x1, y1, w, h, det_conf))
 
+        # Step 2: Classify
         if crops:
             cls_results = classify_crops_batched(
                 crops, group_names, classifiers, cls_transform, device
             )
             for j, (cat_id, cls_conf) in enumerate(cls_results):
                 x1, y1, w, h, det_conf = det_data[j]
+
+                # Score blending: det * (0.5 + 0.5 * cls)
+                # Preserves good detections even when classifier is uncertain
+                score = det_conf * (SCORE_BLEND + (1 - SCORE_BLEND) * cls_conf)
+
                 predictions.append({
                     "image_id": image_id,
                     "category_id": int(cat_id),
                     "bbox": [round(x1, 1), round(y1, 1), round(w, 1), round(h, 1)],
-                    "score": round(det_conf * cls_conf, 3),
+                    "score": round(score, 3),
                 })
 
         if (img_idx + 1) % 50 == 0:
